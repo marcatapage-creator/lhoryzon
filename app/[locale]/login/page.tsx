@@ -7,19 +7,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Link, useRouter } from "@/i18n/routing";
 import { LayoutDashboard, Loader2 } from "lucide-react";
+import { login } from "@/app/actions/auth";
 
 export default function LoginPage() {
     const router = useRouter();
     const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-    async function onSubmit(event: React.SyntheticEvent) {
-        event.preventDefault();
+    async function onSubmit(formData: FormData) {
         setIsLoading(true);
+        setError(null);
 
-        setTimeout(() => {
+        try {
+            const result = await login(formData);
+            if (result) {
+                setError(result);
+            }
+        } catch (e) {
+            console.error(e);
+            setError("Une erreur est survenue.");
+        } finally {
             setIsLoading(false);
-            router.push("/dashboard");
-        }, 1000);
+        }
     }
 
     return (
@@ -50,12 +59,13 @@ export default function LoginPage() {
                     </div>
                 </div>
 
-                <form onSubmit={onSubmit}>
+                <form action={onSubmit} method="POST">
                     <div className="grid gap-4">
                         <div className="grid gap-2">
                             <Label htmlFor="email">Email</Label>
                             <Input
                                 id="email"
+                                name="email"
                                 placeholder="name@example.com"
                                 type="email"
                                 autoCapitalize="none"
@@ -63,6 +73,7 @@ export default function LoginPage() {
                                 autoCorrect="off"
                                 disabled={isLoading}
                                 className="h-11 bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800"
+                                required
                             />
                         </div>
                         <div className="grid gap-2">
@@ -74,13 +85,22 @@ export default function LoginPage() {
                             </div>
                             <Input
                                 id="password"
+                                name="password"
                                 placeholder="••••••••"
                                 type="password"
                                 autoComplete="current-password"
                                 disabled={isLoading}
                                 className="h-11 bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800"
+                                required
                             />
                         </div>
+
+                        {error && (
+                            <div className="text-sm font-medium text-red-500 dark:text-red-400">
+                                {error}
+                            </div>
+                        )}
+
                         <Button className="h-11 bg-blue-600 hover:bg-blue-700 text-white w-full mt-2" disabled={isLoading}>
                             {isLoading && (
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

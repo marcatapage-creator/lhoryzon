@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 
 interface DetailedExpenseData {
     name: string;
@@ -32,7 +32,7 @@ const CustomTooltip = ({ active, payload }: CustomTooltipProps) => {
                 <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.payload.color }} />
                     <span className="text-white font-bold text-sm">
-                        {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(item.value)}
+                        {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(item.value / 100)}
                     </span>
                 </div>
             </div>
@@ -49,7 +49,7 @@ export function DetailedExpensePieChart({ data }: DetailedExpensePieChartProps) 
             style: "currency",
             currency: "EUR",
             maximumFractionDigits: 0,
-        }).format(amount);
+        }).format(amount / 100);
     };
 
     if (data.length === 0) {

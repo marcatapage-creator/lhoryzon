@@ -8,12 +8,11 @@ export const LandingProblem = () => {
             <div className="container mx-auto px-4">
                 <div className="max-w-3xl mx-auto text-center mb-16">
                     <h2 className="text-3xl md:text-4xl font-bold text-zinc-900 dark:text-white mb-6">
-                        Le problème avec votre banque,<br />
-                        <span className="text-zinc-400">c'est qu'elle vous ment.</span>
+                        Encaisser n’est pas gagner.
                     </h2>
                     <p className="text-lg text-zinc-600 dark:text-zinc-400 leading-relaxed">
                         Votre solde bancaire ne vous dit pas ce que vous pouvez dépenser.
-                        Il oublie la TVA à rendre, l'Urssaf qui tombe le 20, et l'impôt sur les sociétés.
+                        Il oublie la TVA à rendre, l&apos;Urssaf qui tombe le 20, et l&apos;impôt sur les sociétés.
                     </p>
                 </div>
 
@@ -35,10 +34,10 @@ export const LandingProblem = () => {
                         <div className="w-12 h-12 rounded-xl bg-red-100 dark:bg-red-900/20 flex items-center justify-center mb-6 text-red-600 dark:text-red-400">
                             <TrendingDown className="w-6 h-6" />
                         </div>
-                        <h3 className="text-xl font-bold text-zinc-900 dark:text-white mb-3">L'Urssaf surprise</h3>
+                        <h3 className="text-xl font-bold text-zinc-900 dark:text-white mb-3">L&apos;Urssaf surprise</h3>
                         <p className="text-zinc-600 dark:text-zinc-400">
                             Le prélèvement tombe toujours au mauvais moment.
-                            Sans anticipation, c'est le découvert assuré.
+                            Sans anticipation, c&apos;est le découvert assuré.
                         </p>
                     </div>
 
@@ -49,7 +48,7 @@ export const LandingProblem = () => {
                         </div>
                         <h3 className="text-xl font-bold text-zinc-900 dark:text-white mb-3">Pilotage à vue</h3>
                         <p className="text-zinc-600 dark:text-zinc-400">
-                            Vous attendez le bilan de votre comptable en avril pour savoir si vous avez gagné de l'argent l'année dernière. Trop tard.
+                            Vous attendez le bilan de votre comptable en avril pour savoir si vous avez gagné de l&apos;argent l&apos;année dernière. Trop tard.
                         </p>
                     </div>
                 </div>

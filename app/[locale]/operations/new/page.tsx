@@ -5,6 +5,7 @@ import { ComptaLayout } from "@/components/compta/compta-layout";
 import { ComptaWizard } from "@/components/compta/wizard/Wizard";
 import { useComptaStore } from "@/store/comptaStore";
 import { Operation } from "@/lib/compta/types";
+import { migrateOperation } from "@/lib/compta/migration";
 import { useRouter } from "@/i18n/routing";
 import { toast } from "sonner";
 
@@ -13,31 +14,32 @@ export default function NewOperationPage() {
     const router = useRouter();
 
     const initialData: Partial<Operation> = useMemo(() => {
-        if (currentDraft && !currentDraft.id) {
-            return currentDraft;
+        if (currentDraft && !("id" in currentDraft)) {
+            return migrateOperation(currentDraft);
         }
         return {
             year: new Date().getFullYear(),
-            cashCurrent: 0,
+            cashCurrent_cents: 0,
             income: {
                 salaryTTCByMonth: {
                     Jan: 0, Feb: 0, Mar: 0, Apr: 0, May: 0, Jun: 0,
                     Jul: 0, Aug: 0, Sep: 0, Oct: 0, Nov: 0, Dec: 0,
                 },
-                otherIncomeTTC: 0,
-                otherIncomeVATRate: 0,
+                otherIncomeTTC_cents: 0,
+                otherIncomeVATRate_bps: 0,
                 otherIncomeSelectedMonths: [],
+                items: [],
             },
             expenses: {
                 pro: { items: [] },
                 social: {
-                    urssaf: 0,
+                    urssaf_cents: 0,
                     urssafPeriodicity: "yearly",
-                    ircec: 0,
+                    ircec_cents: 0,
                     ircecPeriodicity: "yearly",
                 },
                 taxes: {
-                    incomeTax: 0,
+                    incomeTax_cents: 0,
                     incomeTaxPeriodicity: "yearly",
                 },
                 personal: { items: [] },
@@ -47,7 +49,7 @@ export default function NewOperationPage() {
         };
     }, [currentDraft]);
 
-    const handleSave = useCallback((data: Operation) => {
+    const handleSave = useCallback(async (data: Operation) => {
         const finalOp: Operation = {
             ...data,
             id: `op-${Date.now()}`,
@@ -57,7 +59,7 @@ export default function NewOperationPage() {
                 updatedAt: new Date().toISOString(),
             }
         };
-        addOperation(finalOp);
+        await addOperation(finalOp);
         toast.success(`Opération ${finalOp.year} enregistrée avec succès !`);
         router.push("/operations");
     }, [addOperation, router]);

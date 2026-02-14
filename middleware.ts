@@ -35,14 +35,17 @@ export default auth(async (req) => {
     const response = intlMiddleware(req)
 
     // 4. Add Content Security Policy headers
+    const isDev = process.env.NODE_ENV === 'development'
     const cspHeader = `
         default-src 'self';
-        script-src 'self' 'unsafe-eval' 'unsafe-inline' https:;
+        script-src 'self' 'unsafe-eval' ${isDev ? "'unsafe-inline'" : ""} https:;
         style-src 'self' 'unsafe-inline' https:;
         img-src 'self' blob: data: https:;
         font-src 'self' data: https:;
         connect-src 'self' https:;
         frame-src 'self' https:;
+        base-uri 'self';
+        form-action 'self';
     `.replace(/\s{2,}/g, ' ').trim()
 
     response.headers.set('Content-Security-Policy', cspHeader)

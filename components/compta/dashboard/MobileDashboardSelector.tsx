@@ -51,7 +51,7 @@ export function MobileDashboardSelector({
                 <DrawerTrigger asChild>
                     <Button
                         variant="outline"
-                        className="w-full h-12 justify-between px-4 bg-white dark:bg-slate-900 border-slate-200 dark:border-white/10 shadow-sm rounded-xl mb-4"
+                        className="w-full h-14 justify-between px-4 bg-white dark:bg-slate-900 border-slate-200 dark:border-white/10 shadow-sm rounded-xl mb-2"
                     >
                         <div className="flex items-center gap-3">
                             <div className="bg-blue-100 dark:bg-blue-900/30 p-2 rounded-lg">

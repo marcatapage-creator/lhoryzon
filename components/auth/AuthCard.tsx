@@ -30,9 +30,11 @@ export const AuthCard = ({ children, title, subtitle, footerLink, className }: A
             )}>
                 <div className="flex flex-col items-center text-center mb-8">
                     <Link href="/" className="flex items-center gap-1 group mb-6">
-                        <span className="text-2xl font-bold tracking-tighter text-zinc-900 dark:text-white">
-                            FL<span className="text-blue-600 transition-colors group-hover:text-blue-500">UX</span>.
-                        </span>
+                        <div className="flex items-center text-2xl font-bold tracking-tighter">
+                            <span className="text-zinc-900 dark:text-white">LORYZ</span>
+                            <span className="text-blue-600 transition-colors group-hover:text-blue-500">ON</span>
+                            <span className="text-zinc-900 dark:text-white">.</span>
+                        </div>
                     </Link>
                     <h1 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight">{title}</h1>
                     {subtitle && <p className="text-zinc-500 dark:text-zinc-400 mt-2 text-sm">{subtitle}</p>}

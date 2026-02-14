@@ -19,7 +19,7 @@ export default function EditOperationPage() {
         return operations.find(o => o.id === id);
     }, [operations, id]);
 
-    const handleSave = useCallback((data: Operation) => {
+    const handleSave = useCallback(async (data: Operation) => {
         const finalOp: Operation = {
             ...data,
             meta: {
@@ -27,13 +27,13 @@ export default function EditOperationPage() {
                 updatedAt: new Date().toISOString(),
             }
         };
-        updateOperation(finalOp);
+        await updateOperation(finalOp);
         toast.success(`Bilan ${finalOp.year} mis à jour.`);
-        router.push("/compta/operations");
+        router.push("/operations");
     }, [updateOperation, router]);
 
     const handleCancel = useCallback(() => {
-        router.push("/compta/operations");
+        router.push("/operations");
     }, [router]);
 
     const handleDraftUpdate = useCallback(() => {
@@ -45,7 +45,7 @@ export default function EditOperationPage() {
             <ComptaLayout>
                 <div className="text-center py-20">
                     <h2 className="text-xl font-bold">Opération non trouvée</h2>
-                    <button onClick={() => router.push("/compta/operations")} className="text-blue-600 underline mt-4">
+                    <button onClick={() => router.push("/operations")} className="text-blue-600 underline mt-4">
                         Retour aux opérations
                     </button>
                 </div>

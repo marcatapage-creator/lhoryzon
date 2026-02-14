@@ -1,0 +1,15 @@
+-- AlterTable
+ALTER TABLE "AccountingOperation" ADD COLUMN     "incomeTaxByMonth" JSONB,
+ADD COLUMN     "incomeTaxPeriodicity" TEXT NOT NULL DEFAULT 'yearly',
+ADD COLUMN     "incomeTax_cents" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN     "ircecByMonth" JSONB,
+ADD COLUMN     "ircecPeriodicity" TEXT NOT NULL DEFAULT 'yearly',
+ADD COLUMN     "ircec_cents" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN     "otherIncomeSelectedMonths" TEXT[],
+ADD COLUMN     "otherIncomeTTC_cents" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN     "otherIncomeVATRate_bps" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "salaryTTCByMonth" JSONB,
+ADD COLUMN     "totalOverrideTTC_cents" BIGINT,
+ADD COLUMN     "urssafByMonth" JSONB,
+ADD COLUMN     "urssafPeriodicity" TEXT NOT NULL DEFAULT 'yearly',
+ADD COLUMN     "urssaf_cents" BIGINT NOT NULL DEFAULT 0;

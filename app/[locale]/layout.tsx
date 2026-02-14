@@ -13,7 +13,7 @@ const geistMono = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "FLUX.",
+  title: "LORYZON.",
   description: "Solution comptable autonome pour vos finances.",
   icons: {
     icon: "/icon-192.png",

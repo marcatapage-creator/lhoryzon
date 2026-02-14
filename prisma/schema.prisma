@@ -8,62 +8,92 @@ datasource db {
   directUrl = env("POSTGRES_URL_NON_POOLING")
 }
 
-// --- NextAuth.js Models ---
-
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
-  password      String?   // For Credentials provider
-  accounts      Account[]
-  sessions      Session[]
-  
-  profile       UserProfile?
-  preferences   UserPreferences?
-  
-  subscription  UserSubscription?
-  
-  accountingEntries AccountingEntry[]
-  accountingSettings AccountingSettings[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
+  id                   String                @id @default(cuid())
+  name                 String?
+  email                String?               @unique
+  emailVerified        DateTime?
+  image                String?
+  password             String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  accounts             Account[]
   accountingOperations AccountingOperation[]
+  accountingSettings   AccountingSettings[]
+  sessions             Session[]
+  preferences          UserPreferences?
+  profile              UserProfile?
+  subscription         UserSubscription?
+  fiscalConfig         FiscalConfig?
+  forecasts            Forecast[]
 }
 
 model AccountingOperation {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  year      Int
-  data      Json
-  
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                        String           @id @default(cuid())
+  userId                    String
+  year                      Int
+  cashCurrent_cents         BigInt           @default(0)
+  isScenario                Boolean          @default(false)
+  scenarioName              String?
+  vatPaymentFrequency       String           @default("yearly")
+  vatCarryover_cents        BigInt           @default(0)
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+  incomeTaxByMonth          Json?
+  incomeTaxPeriodicity      String           @default("yearly")
+  incomeTax_cents           BigInt           @default(0)
+  ircecByMonth              Json?
+  ircecPeriodicity          String           @default("yearly")
+  ircec_cents               BigInt           @default(0)
+  otherIncomeSelectedMonths String[]
+  otherIncomeTTC_cents      BigInt           @default(0)
+  otherIncomeVATRate_bps    Int              @default(0)
+  salaryTTCByMonth          Json?
+  totalOverrideTTC_cents    BigInt?
+  urssafByMonth             Json?
+  urssafPeriodicity         String           @default("yearly")
+  urssaf_cents              BigInt           @default(0)
+  engineVersion             String?
+  fiscalHash                String?
+  items                     AccountingItem[]
+  user                      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, year])
   @@index([userId])
 }
 
-model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?
-  access_token       String?
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String?
-  session_state      String?
+model AccountingItem {
+  id             String              @id @default(cuid())
+  operationId    String
+  label          String
+  amount_cents   BigInt
+  vatRate_bps    Int                 @default(2000)
+  type           String
+  category       String
+  periodicity    String              @default("yearly")
+  durationMonths Int?
+  selectedMonths String[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  operation      AccountingOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([operationId])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
 }
@@ -87,66 +117,80 @@ model VerificationToken {
 model UserSubscription {
   id                   String    @id @default(cuid())
   userId               String    @unique
-  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  plan                 String      @default("FREE")
-  status               String    @default("active") // stripe status: active, trialing, past_due...
-  
+  plan                 String    @default("FREE")
+  status               String    @default("active")
   stripeCustomerId     String?   @unique
   stripeSubscriptionId String?   @unique
   currentPeriodEnd     DateTime?
-  
   updatedAt            DateTime  @updatedAt
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model UserProfile {
   id          String   @id @default(cuid())
   userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
   displayName String?
   locale      String   @default("fr-FR")
   timezone    String   @default("Europe/Paris")
   currency    String   @default("EUR")
-  
   updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model UserPreferences {
-  id              String   @id @default(cuid())
-  userId          String   @unique
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  theme           String   @default("system") // light, dark, system
-  
-  updatedAt       DateTime @updatedAt
-}
-
-model AccountingEntry {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  year        Int
-  month       Int      // 0-11
-  categoryId  String   // e.g. "salaire_brut", "charge_pro"
-  value       Decimal  // Stored amount
-  
-  updatedAt   DateTime @updatedAt
-
-  @@unique([userId, year, month, categoryId]) 
-  @@index([userId, year])
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  theme     String   @default("system")
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model AccountingSettings {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  year            Int
-  startingBalance Decimal @default(0)
-  
-  updatedAt       DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  userId                String
+  year                  Int
+  startingBalance_cents BigInt   @default(0)
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, year])
+}
+
+model FiscalConfig {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  status            String   // MICRO_BNC, MICRO_BIC, EI_REEL, SASU_IS, EURL_IS
+  nbParts           Float    @default(1.0)
+  
+  vatRegime         String   @default("franchise") 
+  vatPeriodicity    String   @default("yearly")
+  
+  socialRegime      String?  // BNC, ARTISTE_AUTEUR, ASSIMILE_SALARIE
+  socialPeriodicity String   @default("yearly")
+  
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Forecast {
+  id                  String   @id @default(cuid())
+  userId              String
+  year                Int
+  month               Int
+  
+  incomeTTC_cents     BigInt   @default(0)
+  expensesTTC_cents   BigInt   @default(0)
+  
+  socialDue_cents     BigInt   @default(0)
+  taxDue_cents        BigInt   @default(0)
+  vatDue_cents        BigInt   @default(0)
+  
+  netAvailable_cents  BigInt   @default(0)
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, month])
 }

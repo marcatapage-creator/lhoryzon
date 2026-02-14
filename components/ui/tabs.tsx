@@ -90,6 +90,9 @@ function TabsTrigger({
 
   const triggerRef = React.useRef<HTMLButtonElement>(null)
 
+  // We remove the automatic scrollIntoView on mount/activation as it causes unwanted page jumping
+  // and interferes with the user's focus, especially on the dashboard.
+  /*
   React.useEffect(() => {
     if (isActive && triggerRef.current) {
       triggerRef.current.scrollIntoView({
@@ -99,6 +102,7 @@ function TabsTrigger({
       })
     }
   }, [isActive])
+  */
 
   return (
     <TabsPrimitive.Trigger
@@ -124,7 +128,7 @@ function TabsTrigger({
           className={cn(
             variant === "pill"
               ? "absolute inset-0 bg-background dark:bg-black rounded-lg shadow-sm border dark:border-white/10"
-              : "absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
+              : "absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"
           )}
           initial={false}
           transition={{ type: "spring", bounce: 0.18, duration: 0.5 }}

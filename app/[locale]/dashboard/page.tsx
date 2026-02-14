@@ -4,6 +4,7 @@ import React, { useState, useMemo } from "react";
 import { ComptaLayout } from "@/components/compta/compta-layout";
 import { cn } from "@/lib/utils";
 import { useComptaStore } from "@/store/comptaStore";
+import { FiscalHealthWidget } from "@/components/compta/dashboard/FiscalHealthWidget";
 import { KpiCards, RollingNumber } from "@/components/compta/dashboard/KpiCards";
 import {
     computeFilteredTotals,
@@ -20,14 +21,18 @@ import { Month, MONTHS } from "@/lib/compta/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Search, HelpCircle, PieChart as PieChartIcon } from "lucide-react";
-import { Link } from "@/i18n/routing";
+import { PlusCircle, Search, HelpCircle, PieChart as PieChartIcon, Download, Upload, FlaskConical as Flask, BarChart3 } from "lucide-react";
+import { Link, useRouter } from "@/i18n/routing";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from "recharts";
 import { ExpensePieChart } from "@/components/compta/dashboard/ExpensePieChart";
 import { IncomePieChart } from "@/components/compta/dashboard/IncomePieChart";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DetailedExpensePieChart } from "@/components/compta/dashboard/DetailedExpensePieChart";
 import { MobileDashboardSelector } from "@/components/compta/dashboard/MobileDashboardSelector";
+import { OperationSchema } from "@/lib/compta/types";
+import { migrateOperation } from "@/lib/compta/migration";
+import { saveOperation } from "@/app/actions/compta";
+import { toast } from "sonner";
 
 interface TooltipPayloadItem {
     color?: string;
@@ -44,14 +49,14 @@ interface CustomTooltipProps {
 const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
     if (active && payload && payload.length) {
         return (
-            <div className="bg-slate-900/90 backdrop-blur-md border border-white/10 p-3 rounded-xl shadow-xl relative z-[100]">
-                <p className="text-slate-400 text-xs font-bold mb-2 uppercase tracking-wider">{label}</p>
+            <div className="bg-white dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-white/10 p-3 rounded-xl shadow-xl relative z-[100]">
+                <p className="text-slate-500 dark:text-slate-400 text-xs font-bold mb-2 uppercase tracking-wider">{label}</p>
                 <div className="space-y-1.5">
                     {payload.map((item, index) => (
                         <div key={index} className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.5)]" style={{ backgroundColor: item.color || item.fill }} />
-                            <span className="text-white font-bold text-sm">
-                                {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(item.value)}
+                            <div className="w-2 h-2 rounded-full shadow-sm" style={{ backgroundColor: item.color || item.fill }} />
+                            <span className="text-slate-900 dark:text-white font-bold text-sm">
+                                {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(item.value / 100)}
                             </span>
                         </div>
                     ))}
@@ -62,28 +67,15 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
     return null;
 };
 
-export default function ComptaDashboardPage() {
-    const { operations, selectedOperationId, setSelectedOperationId, monthFilter, setMonthFilter, fiscalProfile } = useComptaStore();
-    const hasScrolledRef = React.useRef(false);
+import { Skeleton } from "@/components/ui/skeleton";
 
-    React.useEffect(() => {
-        if (!hasScrolledRef.current) {
-            // Use a small timeout to ensure other effects/autofocus have completed
-            const timer = setTimeout(() => {
-                window.scrollTo({ top: 0, behavior: "instant" });
-                hasScrolledRef.current = true;
-            }, 100);
-            return () => clearTimeout(timer);
-        }
-    }, []);
+export default function ComptaDashboardPage() {
+    const { operations, selectedOperationId, setSelectedOperationId, monthFilter, setMonthFilter, fiscalProfile, isLoading } = useComptaStore();
     const [expenseDetailType, setExpenseDetailType] = useState<"pro" | "personal">("pro");
 
     const selectedOperationIdOrFirst = selectedOperationId || operations[0]?.id;
     const isMultiYear = selectedOperationIdOrFirst === "all";
 
-    React.useEffect(() => {
-        window.scrollTo(0, 0);
-    }, []);
 
     // Initialize selection to most recent year if not set (for persistence)
     // We add a small delay to ensure hydration has settled
@@ -121,12 +113,38 @@ export default function ComptaDashboardPage() {
 
             return {
                 name: month,
-                "Entrées TTC": monthTotals.incomeTTC,
-                "Sorties Réelles": monthTotals.realTreasuryOutflow,
-                "Surplus": monthTotals.incomeTTC - monthTotals.realTreasuryOutflow,
+                "Entrées TTC": monthTotals.incomeTTC_cents,
+                "Sorties Réelles": monthTotals.realTreasuryOutflow_cents,
+                "Surplus": monthTotals.incomeTTC_cents - monthTotals.realTreasuryOutflow_cents,
             };
         });
-    }, [isMultiYear, selectedOp, operations]);
+    }, [isMultiYear, selectedOp, operations, fiscalProfile]);
+
+    if (isLoading) {
+        return (
+            <ComptaLayout>
+                <div className="space-y-8">
+                    <div className="flex flex-col gap-4">
+                        <Skeleton className="h-10 w-48" />
+                        <Skeleton className="h-4 w-96" />
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                        <Skeleton className="h-32 w-full" />
+                        <Skeleton className="h-32 w-full" />
+                        <Skeleton className="h-32 w-full" />
+                        <Skeleton className="h-32 w-full" />
+                    </div>
+
+                    <div className="grid gap-6 md:grid-cols-3">
+                        <Skeleton className="h-[300px] w-full" />
+                        <Skeleton className="h-[300px] w-full" />
+                        <Skeleton className="h-[300px] w-full" />
+                    </div>
+                </div>
+            </ComptaLayout>
+        );
+    }
 
     if (operations.length === 0) {
         return (
@@ -143,6 +161,112 @@ export default function ComptaDashboardPage() {
                             Ajouter une opération
                         </Button>
                     </Link>
+
+                    <div className="mt-8 flex flex-col md:flex-row items-center gap-4">
+                        <Button variant="outline" onClick={() => {
+                            const template = {
+                                title: "Modèle d'importation (JSON)",
+                                id: "model-2025",
+                                year: 2025,
+                                cashCurrent: 0,
+                                income: {
+                                    salaryTTCByMonth: { Jan: 0, Feb: 0, Mar: 0, Apr: 0, May: 0, Jun: 0, Jul: 0, Aug: 0, Sep: 0, Oct: 0, Nov: 0, Dec: 0 },
+                                    otherIncomeTTC: 0,
+                                    otherIncomeVATRate: 0,
+                                    otherIncomeSelectedMonths: []
+                                },
+                                expenses: {
+                                    pro: { items: [] },
+                                    social: { urssaf: 0, ircec: 0 },
+                                    taxes: { incomeTax: 0 },
+                                    personal: { items: [] },
+                                    otherItems: []
+                                },
+                                meta: { version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+                            };
+                            const blob = new Blob([JSON.stringify(template, null, 2)], { type: "application/json" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = "modele-compta-loryzon.json";
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                        }}>
+                            <Download className="mr-2 h-4 w-4" />
+                            Télécharger le modèle (JSON)
+                        </Button>
+
+                        <div className="relative">
+                            <input
+                                type="file"
+                                accept=".json"
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+
+                                    const reader = new FileReader();
+                                    reader.onload = async (event) => {
+                                        try {
+                                            const json = JSON.parse(event.target?.result as string);
+                                            // Allow both single object and array
+                                            const rawData = Array.isArray(json) ? json : [json];
+
+                                            // DATA MIGRATION LAYER
+                                            const migratedOps = rawData.map(op => migrateOperation(op));
+
+                                            // VALIDATION
+                                            const validated = OperationSchema.array().safeParse(migratedOps);
+
+                                            if (!validated.success) {
+                                                const firstError = validated.error.issues[0];
+                                                const path = firstError.path.join('.');
+                                                toast.error(`Format invalide: ${path} - ${firstError.message}`);
+                                                return;
+                                            }
+
+                                            const ops = validated.data;
+                                            const store = useComptaStore.getState();
+
+                                            // Default Profile if missing
+                                            if (!store.fiscalProfile) {
+                                                store.setFiscalProfile({
+                                                    status: 'sas_is',
+                                                    vatEnabled: true,
+                                                    isPro: true
+                                                });
+                                            }
+
+                                            // Optimistic update
+                                            store.setOperations([...store.operations, ...ops]);
+
+                                            // Persist to DB
+                                            const promise = Promise.all(ops.map(op => saveOperation(op)));
+
+                                            toast.promise(promise, {
+                                                loading: 'Sauvegarde des données importées...',
+                                                success: `${ops.length} opération(s) importée(s) et sauvegardée(s)`,
+                                                error: 'Erreur lors de la sauvegarde en base de données'
+                                            });
+
+                                        } catch (err) {
+                                            console.error("Import error:", err);
+                                            toast.error("Erreur de lecture du fichier JSON");
+                                        } finally {
+                                            e.target.value = "";
+                                        }
+                                    };
+                                    reader.readAsText(file);
+                                }}
+                            />
+                            <Button variant="outline">
+                                <Upload className="mr-2 h-4 w-4" />
+                                Importer un fichier
+                            </Button>
+                        </div>
+                    </div>
                 </div>
             </ComptaLayout>
         );
@@ -150,11 +274,19 @@ export default function ComptaDashboardPage() {
 
     return (
         <ComptaLayout>
-            <div className="space-y-8">
-                <div className="sticky top-16 md:top-0 z-30 -mt-8 mb-8 pt-8 pb-4 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-transparent transition-all duration-200 -mx-4 px-4 sm:-mx-6 sm:px-6">
+            <div className="space-y-4">
+                <div className="sticky top-16 md:top-0 z-30 -mt-8 mb-6 md:mb-8 pt-8 pb-3 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-transparent transition-all duration-200 -mx-4 px-4 sm:-mx-6 sm:px-6">
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-                        <div>
-                            <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Pilotage Financier</h1>
+                        <div className="flex-1">
+                            <div className="flex items-center gap-3">
+                                <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Pilotage Financier</h1>
+                                {selectedOp?.isScenario && (
+                                    <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-full border border-amber-200 dark:border-amber-800/50">
+                                        <Flask size={14} className="animate-pulse" />
+                                        <span className="text-[10px] font-bold uppercase tracking-wider">{selectedOp.scenarioName || "Mode Simulation"}</span>
+                                    </div>
+                                )}
+                            </div>
                             <p className="hidden md:block text-slate-500 dark:text-slate-400">Suivez vos indicateurs de performance et votre TVA en temps réel.</p>
                         </div>
 
@@ -180,7 +312,13 @@ export default function ComptaDashboardPage() {
                                         <SelectContent>
                                             <SelectItem value="all">Toutes les années</SelectItem>
                                             {[...operations].sort((a, b) => b.year - a.year).map(op => (
-                                                <SelectItem key={op.id} value={op.id}>{op.year}</SelectItem>
+                                                <SelectItem key={op.id} value={op.id}>
+                                                    <div className="flex items-center gap-2">
+                                                        {op.isScenario && <Flask size={12} className="text-amber-500" />}
+                                                        <span>{op.year}</span>
+                                                        {op.isScenario && <span className="text-[10px] opacity-50">(Simu)</span>}
+                                                    </div>
+                                                </SelectItem>
                                             ))}
                                         </SelectContent>
                                     </Select>
@@ -210,18 +348,63 @@ export default function ComptaDashboardPage() {
                     </div>
                 </div>
 
+                <FiscalHealthWidget />
+
                 {totals && <KpiCards totals={totals} period={isMultiYear ? "multi" : monthFilter} />}
 
-                <div className="grid gap-6 md:grid-cols-3">
-                    <Card className="border-slate-200/60 dark:border-white/10 shadow-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm flex flex-col h-full">
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <Card className="border-slate-200 dark:border-white/5 shadow-sm dark:shadow-2xl bg-white dark:bg-slate-900/10 backdrop-blur-md flex flex-col h-full lg:col-span-2 order-2 md:order-1">
+                        <CardHeader className="flex flex-row items-center justify-between pb-2 border-b border-slate-200 dark:border-white/5 mb-4">
                             <div className="space-y-1">
-                                <CardTitle>Répartition des rentrées</CardTitle>
-                                <CardDescription>Provenance de vos revenus</CardDescription>
+                                <CardTitle className="text-lg font-bold">Flux de trésorerie</CardTitle>
+                                <CardDescription className="text-[10px] uppercase font-bold tracking-widest opacity-50">Impact réel sur compte</CardDescription>
                             </div>
-                            <PieChartIcon className="h-4 w-4 text-emerald-400" />
+                            <BarChart3 className="h-4 w-4 text-blue-500 dark:text-blue-400" />
+                        </CardHeader>
+                        <CardContent className="h-[300px] pt-4">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={chartData} margin={{ top: 0, right: 10, left: 0, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="currentColor" className="text-slate-200 dark:text-white/5" />
+                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10 }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10 }} />
+                                    <Tooltip
+                                        cursor={{ fill: 'currentColor', opacity: 0.05 }}
+                                        content={<CustomTooltip />}
+                                        wrapperStyle={{ zIndex: 100 }}
+                                    />
+                                    <Bar dataKey="Entrées TTC" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                                    <Bar dataKey="Sorties Réelles" fill="#f43f5e" radius={[4, 4, 0, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </CardContent>
+                    </Card>
+
+                    <Card className="border-slate-200 dark:border-white/5 shadow-sm dark:shadow-xl bg-white dark:bg-slate-900/10 backdrop-blur-md flex flex-col h-full order-1 md:order-2">
+                        <CardHeader className="pb-2 border-b border-slate-200 dark:border-white/5 mb-4">
+                            <div className="space-y-1">
+                                <CardTitle className="text-lg font-bold text-center">Répartition Globale</CardTitle>
+                                <CardDescription className="text-[10px] uppercase font-bold tracking-widest opacity-50 text-center">Où part votre argent</CardDescription>
+                            </div>
                         </CardHeader>
                         <CardContent className="flex-1 min-h-[300px]">
+                            {isMultiYear ? (
+                                <ExpensePieChart data={getMultiYearExpenseDistribution(operations, fiscalProfile)} />
+                            ) : (
+                                selectedOp && <ExpensePieChart data={getExpenseDistribution(selectedOp, monthFilter, fiscalProfile)} />
+                            )}
+                        </CardContent>
+                    </Card>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                    <Card className="border-slate-200 dark:border-white/5 bg-white dark:bg-slate-900/5 backdrop-blur-sm shadow-none">
+                        <CardHeader className="flex flex-row items-center justify-between pb-2">
+                            <div className="space-y-1">
+                                <CardTitle className="text-md font-bold">Provenance des revenus</CardTitle>
+                            </div>
+                            <PieChartIcon className="h-4 w-4 text-emerald-500 dark:text-emerald-400 opacity-50" />
+                        </CardHeader>
+                        <CardContent className="h-[250px]">
                             {isMultiYear ? (
                                 <IncomePieChart data={getMultiYearIncomeDistribution(operations)} />
                             ) : (
@@ -230,37 +413,19 @@ export default function ComptaDashboardPage() {
                         </CardContent>
                     </Card>
 
-                    <Card className="border-slate-200/60 dark:border-white/10 shadow-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm flex flex-col h-full">
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                    <Card className="border-slate-200 dark:border-white/5 bg-white dark:bg-slate-900/5 backdrop-blur-sm shadow-none">
+                        <CardHeader className="flex flex-row items-center justify-between pb-2">
                             <div className="space-y-1">
-                                <CardTitle>Répartition globale</CardTitle>
-                                <CardDescription>Catégories de dépenses</CardDescription>
-                            </div>
-                            <PieChartIcon className="h-4 w-4 text-slate-400" />
-                        </CardHeader>
-                        <CardContent className="flex-1 min-h-[300px]">
-                            {isMultiYear ? (
-                                <ExpensePieChart data={getMultiYearExpenseDistribution(operations)} />
-                            ) : (
-                                selectedOp && <ExpensePieChart data={getExpenseDistribution(selectedOp, monthFilter)} />
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-slate-200/60 dark:border-white/10 shadow-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm flex flex-col h-full">
-                        <CardHeader className="flex flex-wrap items-center justify-between gap-y-2 space-y-0 pb-2">
-                            <div className="space-y-1">
-                                <CardTitle>Détail des charges</CardTitle>
-                                <CardDescription>Répartition par libellé</CardDescription>
+                                <CardTitle className="text-md font-bold">Détail des charges</CardTitle>
                             </div>
                             <Tabs value={expenseDetailType} onValueChange={(v) => setExpenseDetailType(v as "pro" | "personal")} className="w-auto">
-                                <TabsList className="grid w-[120px] grid-cols-2 h-8 p-1 overflow-hidden">
-                                    <TabsTrigger value="pro" className="text-[10px] h-full p-0">Pro</TabsTrigger>
-                                    <TabsTrigger value="personal" className="text-[10px] h-full p-0">Perso</TabsTrigger>
+                                <TabsList className="h-7 p-1 overflow-hidden bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/5">
+                                    <TabsTrigger value="pro" className="text-[9px] h-full p-0 px-2 uppercase font-black">Pro</TabsTrigger>
+                                    <TabsTrigger value="personal" className="text-[9px] h-full p-0 px-2 uppercase font-black">Perso</TabsTrigger>
                                 </TabsList>
                             </Tabs>
                         </CardHeader>
-                        <CardContent className="flex-1 min-h-[300px]">
+                        <CardContent className="h-[250px]">
                             {isMultiYear ? (
                                 <DetailedExpensePieChart data={getMultiYearDetailedExpenseDistribution(operations, expenseDetailType)} />
                             ) : (
@@ -269,122 +434,7 @@ export default function ComptaDashboardPage() {
                         </CardContent>
                     </Card>
                 </div>
-
-                <Card className="border-slate-200/60 dark:border-white/10 shadow-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm">
-                    <CardHeader className="pb-0">
-                        <CardTitle>Flux de trésorerie</CardTitle>
-                        <CardDescription>Impact réel sur votre compte (Entrées TTC vs Sorties + TVA Net + Impôts)</CardDescription>
-                    </CardHeader>
-                    <CardContent className="h-[350px] pt-0">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={chartData} margin={{ top: 0, right: 30, left: 20, bottom: 5 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="currentColor" className="text-slate-200/50 dark:text-white/10" />
-                                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                                <Tooltip
-                                    cursor={{ fill: '#f1f5f9', opacity: 0.1 }}
-                                    content={<CustomTooltip />}
-                                    wrapperStyle={{ zIndex: 100 }}
-                                />
-                                <Legend
-                                    verticalAlign="top"
-                                    align="right"
-                                    iconType="circle"
-                                    wrapperStyle={{ paddingBottom: '24px' }}
-                                    content={({ payload }) => (
-                                        <div className="flex justify-end gap-6 pb-6 text-xs font-medium text-slate-400">
-                                            {payload?.map((entry: { color?: string; value?: string | number | null }, index: number) => (
-                                                <div key={`item-${index}`} className="flex items-center gap-1.5">
-                                                    <div
-                                                        className="w-2 h-2 rounded-full"
-                                                        style={{ backgroundColor: entry.color }}
-                                                    />
-                                                    <span>{entry.value}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                />
-                                <Bar dataKey="Entrées TTC" fill="#3b82f6" radius={[4, 4, 0, 0]}>
-                                    {chartData.map((entry, index) => (
-                                        <Cell
-                                            key={`cell-income-${index}`}
-                                            fill="#3b82f6"
-                                            fillOpacity={monthFilter === "all" || monthFilter === entry.name ? 1 : 0.3}
-                                        />
-                                    ))}
-                                </Bar>
-                                <Bar dataKey="Sorties Réelles" fill="#f43f5e" radius={[4, 4, 0, 0]}>
-                                    {chartData.map((entry, index) => (
-                                        <Cell
-                                            key={`cell-expense-${index}`}
-                                            fill="#f43f5e"
-                                            fillOpacity={monthFilter === "all" || monthFilter === entry.name ? 1 : 0.3}
-                                        />
-                                    ))}
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </CardContent>
-                </Card>
-
-                <div className="grid gap-6 md:grid-cols-1">
-                    <Card className="border-slate-200/60 dark:border-white/10 shadow-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm">
-                        <CardHeader>
-                            <CardTitle>Détail de la période</CardTitle>
-                            <CardDescription>
-                                {isMultiYear ? "Toutes les années cumulées" : (monthFilter === "all" ? "Vue annuelle" : `Vue pour ${monthFilter}`)}
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="space-y-4">
-                                <div className="flex justify-between items-center py-2 border-b">
-                                    <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Revenus TTC</span>
-                                    <span className="font-bold text-slate-900 dark:text-slate-100">{new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(totals?.incomeTTC || 0)}</span>
-                                </div>
-                                <div className="flex justify-between items-center py-2 border-b">
-                                    <div className="flex flex-col">
-                                        <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Paiement TVA (Net)</span>
-                                        <span className="text-[10px] text-slate-400 dark:text-slate-500">Collectée - Déductible</span>
-                                    </div>
-                                    <span className="font-semibold text-amber-600 dark:text-amber-500">{new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(totals?.vatNet || 0)}</span>
-                                </div>
-                                <div className="flex justify-between items-center py-2 border-b">
-                                    <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Charges + Impôts</span>
-                                    <span className="font-semibold text-slate-900 dark:text-slate-100">{new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(totals?.totalExpenses || 0)}</span>
-                                </div>
-                                <div className={cn(
-                                    "flex justify-between items-center py-2 border-b border-slate-200/60 dark:border-white/10 px-2 -mx-2 rounded transition-colors duration-300",
-                                    (totals?.profitHT || 0) >= 0
-                                        ? "bg-emerald-50 dark:bg-emerald-900/10"
-                                        : "bg-red-50 dark:bg-red-900/10"
-                                )}>
-                                    <div className="flex flex-col">
-                                        <span className={cn(
-                                            "text-sm font-bold",
-                                            (totals?.profitHT || 0) >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"
-                                        )}>Surplus Net (HT)</span>
-                                        <span className={cn(
-                                            "text-[10px]",
-                                            (totals?.profitHT || 0) >= 0 ? "text-emerald-600/70 dark:text-emerald-400/50" : "text-red-600/70 dark:text-red-400/50"
-                                        )}>Argent de poche réel</span>
-                                    </div>
-                                    <span className="font-bold">
-                                        <RollingNumber value={totals?.profitHT || 0} showPositiveColor />
-                                    </span>
-                                </div>
-                            </div>
-
-                            <div className="mt-8 p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-white/10 flex items-start gap-3">
-                                <HelpCircle className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
-                                <p className="text-xs text-blue-800 dark:text-blue-200">
-                                    <strong>Impact Trésorerie :</strong> Les &quot;Sorties Réelles&quot; dans le graphique incluent vos charges TTC ET le versement de la TVA à l&apos;État, pour refléter exactement ce qui sort de votre compte.
-                                </p>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            </div >
+            </div>
         </ComptaLayout >
     );
 }

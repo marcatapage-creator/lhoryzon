@@ -26,14 +26,16 @@ export const LandingHeader = () => {
             <div className="container mx-auto px-4 md:px-8 flex items-center justify-between">
                 {/* Logo */}
                 <Link href="/" className="flex items-center gap-1 group">
-                    <span className="text-2xl font-bold tracking-tighter text-zinc-900 dark:text-white">
-                        FL<span className="text-blue-600 transition-colors group-hover:text-blue-500">UX</span>.
-                    </span>
+                    <div className="flex items-center text-2xl font-bold tracking-tighter">
+                        <span className="text-zinc-900 dark:text-white">LORYZ</span>
+                        <span className="text-blue-600 transition-colors group-hover:text-blue-500">ON</span>
+                        <span className="text-zinc-900 dark:text-white">.</span>
+                    </div>
                 </Link>
 
                 {/* Navigation */}
                 <div className="flex items-center gap-4">
-                    <Link href="/login">
+                    <Link href="/login" className="hidden md:block">
                         <Button variant="ghost" className="text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white">
                             Se connecter
                         </Button>

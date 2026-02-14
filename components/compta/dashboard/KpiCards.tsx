@@ -1,38 +1,36 @@
 import React, { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Totals } from "@/lib/compta/calculations";
 import { cn } from "@/lib/utils";
-import { TrendingUp, PiggyBank, Receipt, ShoppingCart, Calculator } from "lucide-react";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { motion, animate } from "framer-motion";
-
-const QontoLogo = ({ className }: { className?: string }) => (
-    <div
-        className={cn("bg-current", className)}
-        style={{
-            maskImage: "url('/qonto-logo.png?v=2')",
-            maskSize: "contain",
-            maskRepeat: "no-repeat",
-            maskPosition: "center",
-            maskMode: "luminance",
-            WebkitMaskImage: "url('/qonto-logo.png?v=2')",
-            WebkitMaskSize: "contain",
-            WebkitMaskRepeat: "no-repeat",
-            WebkitMaskPosition: "center",
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-expect-error
-            WebkitMaskMode: "luminance",
-        }}
-    />
-);
+import {
+    PiggyBank,
+    Wallet,
+    Calendar,
+    ShieldCheck,
+    Calculator,
+    ArrowUpRight,
+    ArrowDownRight,
+    TrendingUp,
+    Briefcase,
+    RefreshCw,
+    Landmark,
+    ChevronDown
+} from "lucide-react";
+import { motion, AnimatePresence, animate } from "framer-motion";
+import { HeroKpiCard } from "./HeroKpiCard";
+import { useComptaStore } from "@/store/comptaStore";
+import { getQontoBalanceAction } from "@/app/actions/accounting";
+import { PaymentTimelineSheet } from "./PaymentTimelineSheet";
+import { SimulationSheet } from "./SimulationSheet";
 
 export interface RollingNumberProps {
     value: number;
     className?: string;
     showPositiveColor?: boolean;
+    unit?: "€" | "%";
 }
 
-export function RollingNumber({ value, className, showPositiveColor = false }: RollingNumberProps) {
+export function RollingNumber({ value, className, showPositiveColor = false, unit = "€" }: RollingNumberProps) {
     const [displayValue, setDisplayValue] = React.useState(value);
 
     React.useEffect(() => {
@@ -43,24 +41,20 @@ export function RollingNumber({ value, className, showPositiveColor = false }: R
             onUpdate: (latest) => setDisplayValue(latest),
         });
         return () => controls.stop();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [value]); // Only trigger when the TARGET value changes
+    }, [value]);
 
-    const formatted = new Intl.NumberFormat("fr-FR", {
-        style: "currency",
-        currency: "EUR",
-    }).format(displayValue);
+    const formatted = unit === "%"
+        ? new Intl.NumberFormat("fr-FR", {
+            style: "decimal", minimumFractionDigits: 1, maximumFractionDigits: 1,
+        }).format(displayValue / 100) + " %"
+        : new Intl.NumberFormat("fr-FR", {
+            style: "currency", currency: "EUR",
+        }).format(displayValue / 100);
 
     const isNegative = value < 0;
 
     return (
-        <motion.span
-            className={cn(
-                "inline-block tabular-nums",
-                isNegative ? "text-red-500" : (showPositiveColor ? "text-emerald-500" : ""),
-                className
-            )}
-        >
+        <motion.span className={cn("inline-block tabular-nums", isNegative ? "text-red-500" : (showPositiveColor ? "text-blue-500" : ""), className)}>
             {formatted}
         </motion.span>
     );
@@ -68,265 +62,252 @@ export function RollingNumber({ value, className, showPositiveColor = false }: R
 
 interface KpiCardsProps {
     totals: Totals;
-    period?: string; // "multi", "all" (for one year), or month name
+    period?: string;
 }
 
-import { getQontoBalanceAction } from "@/app/actions/accounting";
-import { RefreshCw, AlertCircle } from "lucide-react";
-import { useComptaStore } from "@/store/comptaStore";
 
 export function KpiCards({ totals, period }: KpiCardsProps) {
-    const isAnnual = period === "all";
-    const isMulti = period === "multi";
     const { dashboardSettings } = useComptaStore();
-
+    const [hasMounted, setHasMounted] = useState(false);
     const [qontoBalance, setQontoBalance] = useState<number | null>(null);
     const [isQontoLoading, setIsQontoLoading] = useState(false);
-    const [qontoError, setQontoError] = useState<string | null>(null);
+    const [isTimelineOpen, setIsTimelineOpen] = useState(false);
+    const [isSimulationOpen, setIsSimulationOpen] = useState(false);
+    const [isAccordionOpen, setIsAccordionOpen] = useState(false);
 
     const fetchQonto = async () => {
         setIsQontoLoading(true);
-        setQontoError(null);
         try {
             const result = await getQontoBalanceAction();
-            if (result.success && result.balance !== undefined) {
-                setQontoBalance(result.balance);
-            }
-        } catch {
-            setQontoError("Erreur de connexion");
-        } finally {
-            setIsQontoLoading(false);
-        }
+            if (result.success && result.balance !== undefined) setQontoBalance(result.balance * 100); // Scale to cents
+        } catch (e) { console.error(e); } finally { setIsQontoLoading(false); }
     };
 
     useEffect(() => {
+        setHasMounted(true);
         fetchQonto();
     }, []);
 
-    let cashFlowTitle = "Trésorerie / Mois";
-    let cashFlowDesc = "Encaissement - Sorties réelles";
+    if (!hasMounted) return null;
 
-    if (isAnnual) {
-        cashFlowTitle = "Trésorerie / An";
-        cashFlowDesc = "Encaissements - Sorties (Annuel)";
-    } else if (isMulti) {
-        cashFlowTitle = "Trésorerie Totale";
-        cashFlowDesc = "Cumul sur toutes les années";
-    }
+    const isAnnual = period === "all" || period === "multi";
 
-    const allCards = [
-        {
-            id: "Trésorerie Qonto",
-            title: "Trésorerie Qonto",
-            rawValue: qontoBalance ?? 0,
-            description: "Solde réel en temps réel",
-            icon: QontoLogo,
-            color: "text-blue-600 dark:text-blue-400",
-            bg: "bg-blue-50 dark:bg-blue-950/30",
-            isMain: true,
-            isQonto: true,
-        },
-        {
-            id: "Trésorerie / Mois",
-            title: cashFlowTitle,
-            rawValue: totals.incomeTTC - totals.realTreasuryOutflow,
-            description: cashFlowDesc,
-            icon: PiggyBank,
-            color: (totals.incomeTTC - totals.realTreasuryOutflow) >= 0 ? "text-blue-600" : "text-red-600",
-            bg: "bg-blue-50 dark:bg-blue-900/20",
-            isMain: true,
-        },
-        {
-            id: "Trésorerie Finale",
-            title: "Trésorerie Finale",
-            rawValue: totals.projectedTreasury,
-            description: "Solde projeté (Initial + Résultat)",
-            icon: Calculator,
-            color: totals.projectedTreasury >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400",
-            bg: "bg-blue-100 dark:bg-blue-900/40",
-            isMain: true,
-        },
-        {
-            id: "Surplus Réel (HT)",
-            title: "Surplus Réel (HT)",
-            rawValue: totals.profitHT,
-            description: "Ce qu'il vous reste réellement",
-            icon: TrendingUp,
-            color: totals.profitHT >= 0 ? "text-emerald-600" : "text-red-600",
-            bg: "bg-emerald-50 dark:bg-emerald-900/20",
-            isMain: false,
-        },
-        {
-            id: "Estimation TVA",
-            title: "Estimation TVA",
-            rawValue: totals.vatNet,
-            description: "À reverser à l'État",
-            icon: Receipt,
-            color: "text-amber-600",
-            bg: "bg-amber-50 dark:bg-amber-900/20",
-            isMain: false,
-        },
-        {
-            id: "Engagé BTC",
-            title: "Engagé BTC",
-            rawValue: totals.btcTotal,
-            description: "Total investi en Bitcoin",
-            icon: TrendingUp,
-            color: "text-orange-500",
-            bg: "bg-orange-50 dark:bg-orange-950/20",
-            isMain: false,
-        },
-        {
-            id: "Engagé PER",
-            title: "Engagé PER",
-            rawValue: totals.perTotal,
-            description: "Total épargne retraite",
-            icon: TrendingUp,
-            color: "text-violet-500",
-            bg: "bg-violet-50 dark:bg-violet-950/20",
-            isMain: false,
-        },
-        {
-            id: "Sorties Réelles",
-            title: "Sorties Réelles",
-            rawValue: totals.realTreasuryOutflow,
-            description: "Charges + TVA + Impôts",
-            icon: ShoppingCart,
-            color: "text-slate-900 dark:text-slate-100",
-            bg: "bg-slate-100 dark:bg-slate-800",
-            isMain: false,
-        },
-    ].filter(card => dashboardSettings.visibleKpis.includes(card.id));
+    // Level 2 & 3 Data
+    const totalProvision_cents = totals.vatNet_cents + totals.socialTotal_cents + totals.taxTotal_cents;
 
-    const mainCards = allCards.filter(c => c.isMain);
-    const secondaryCards = allCards.filter(c => !c.isMain);
+    const isVisible = (id: string) => dashboardSettings.visibleKpis.includes(id);
+
+    // Filter Level 2 cards
+    const level2Cards = [
+        { id: "qontoBalance", title: "Solde Qonto", value: qontoBalance ?? 0, description: "Argent réel sur votre compte", icon: RefreshCw, isLoading: isQontoLoading, onRefresh: fetchQonto, color: "text-blue-400" },
+        { id: "projectedTreasury", title: "Trésorerie Finale", value: totals.projectedTreasury_cents, description: isAnnual ? "Solde final estimé" : "Solde estimé fin de mois", icon: Landmark, color: totals.projectedTreasury_cents >= 0 ? "text-blue-500" : "text-red-500" },
+        { id: "totalProvision", title: "Provision Totale", value: totalProvision_cents, description: "Argent sanctuarisé (TVA + Social + Impôts)", icon: ShieldCheck, color: "text-amber-500" },
+    ].filter(card => isVisible(card.id));
+
+    // Filter Level 3 cards
+    const level3Cards = [
+        { id: "incomeTTC", title: "Revenus", value: totals.incomeTTC_cents, icon: ArrowUpRight },
+        { id: "realTreasuryOutflow", title: "Sorties", value: totals.realTreasuryOutflow_cents, icon: ArrowDownRight },
+        { id: "btcTotal", title: "Invest. BTC", value: totals.btcTotal_cents, icon: TrendingUp, variant: "invest" },
+        { id: "perTotal", title: "Invest. PER", value: totals.perTotal_cents, icon: PiggyBank, variant: "invest" },
+        { id: "breakEvenPoint", title: "Rentabilité", value: totals.breakEvenPoint_cents, icon: Calculator },
+        { id: "savingsRate", title: "Épargne", value: totals.savingsRate_bps, unit: "%", icon: Briefcase }
+    ].filter(kpi => isVisible(kpi.id));
 
     return (
         <div className="space-y-4">
-            <div className="hidden md:grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {allCards.map((card, index) => {
-                    const Icon = card.icon;
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const qontoCard = (card as any).isQonto;
-
-                    return (
-                        <Card key={index} className="overflow-hidden border-slate-200/60 dark:border-white/10 shadow-sm hover:shadow-md transition-all duration-300 bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm p-0 flex flex-col">
-                            <CardHeader className={cn("flex flex-row items-center justify-between space-y-0 pt-6 pb-4", card.bg)}>
-                                <div className="flex items-center gap-2.5">
-                                    {qontoCard && <QontoLogo className="h-5 w-5 rounded-lg shadow-sm animate-in fade-in zoom-in duration-700" />}
-                                    <CardTitle className="text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                                        {card.title}
-                                    </CardTitle>
-                                </div>
-                                {qontoCard ? (
-                                    <button
-                                        onClick={fetchQonto}
-                                        disabled={isQontoLoading}
-                                        className="hover:bg-black/5 dark:hover:bg-white/5 p-1.5 rounded-full transition-all active:scale-95 disabled:opacity-50"
-                                        title="Rafraîchir le solde Qonto"
-                                    >
-                                        <RefreshCw className={cn("h-3.5 w-3.5 text-blue-500", isQontoLoading && "animate-spin")} />
-                                    </button>
-                                ) : (
-                                    <Icon className={cn("h-5 w-5", card.color)} />
+            {/* NIVEAU 1 : STRATÉGIQUE */}
+            {(isVisible("netPocket") || isVisible("nextDeadline")) && (
+                <section className="grid gap-4 md:grid-cols-3 items-start">
+                    {isVisible("netPocket") && (
+                        <div className={cn("flex flex-col gap-3", isVisible("nextDeadline") ? "md:col-span-2" : "md:col-span-3")}>
+                            <HeroKpiCard
+                                title="Disponible Réel (Net)"
+                                value={totals.netPocket_cents}
+                                description="Ce qu'il vous reste dans la poche"
+                                icon={Wallet}
+                                variant="success"
+                                className="w-full"
+                                isBold={true}
+                            />
+                            <button
+                                onClick={() => setIsSimulationOpen(true)}
+                                className={cn(
+                                    "flex items-center justify-between px-6 py-4 rounded-xl border backdrop-blur-sm text-[10px] font-black uppercase tracking-[0.2em] transition-all w-full",
+                                    totals.netPocket_cents > 0
+                                        ? "border-blue-200/50 dark:border-blue-500/10 bg-blue-50/20 dark:bg-blue-900/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100/30 dark:hover:bg-blue-900/20"
+                                        : "border-slate-200/50 dark:border-white/10 bg-slate-50/5 dark:bg-white/5 text-slate-400 dark:text-slate-500 hover:bg-slate-100/20 dark:hover:bg-white/10 opacity-80"
                                 )}
-                            </CardHeader>
-                            <CardContent className="pt-4 pb-6 flex-1 flex flex-col justify-center">
-                                {qontoCard && qontoError ? (
-                                    <div className="flex items-center gap-2 text-red-500">
-                                        <AlertCircle className="h-4 w-4" />
-                                        <span className="text-xs font-medium">{qontoError}</span>
-                                    </div>
-                                ) : qontoCard && isQontoLoading && qontoBalance === null ? (
-                                    <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 animate-pulse rounded" />
-                                ) : (
-                                    <div className="text-2xl font-bold">
-                                        <RollingNumber value={card.rawValue} />
-                                    </div>
-                                )}
-                                <p className="text-xs text-muted-foreground mt-1">
-                                    {card.description}
-                                </p>
-                            </CardContent>
-                        </Card>
-                    );
-                })}
-            </div>
+                            >
+                                <span>Faire une simulation d&apos;achat</span>
+                                <ArrowUpRight className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                    )}
+                    {isVisible("nextDeadline") && (
+                        <div className={cn("flex flex-col gap-3", !isVisible("netPocket") && "md:col-span-3")}>
+                            <HeroKpiCard
+                                title="Prochaine Échéance"
+                                value={totals.vatNet_cents > 0 ? totals.vatNet_cents : (totalProvision_cents > 0 ? totalProvision_cents : 0)}
+                                description="Estimation TVA / Charges à venir."
+                                icon={Calendar}
+                                variant="warning"
+                                className="flex-1"
+                            />
+                            <button
+                                onClick={() => setIsTimelineOpen(true)}
+                                className="flex items-center justify-between px-6 py-4 rounded-xl border border-amber-200/50 dark:border-amber-500/10 bg-amber-50/20 dark:bg-amber-900/10 backdrop-blur-sm text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 dark:text-amber-400 hover:bg-amber-100/30 dark:hover:bg-amber-900/20 transition-all"
+                            >
+                                <span>Détails de l&apos;échéancier</span>
+                                <ArrowUpRight className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                    )}
+                </section>
+            )}
 
-            <div className="md:hidden space-y-4">
-                <div className="grid gap-3">
-                    {mainCards.map((card, index) => {
-                        const Icon = card.icon;
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        const qontoCard = (card as any).isQonto;
+            <PaymentTimelineSheet
+                isOpen={isTimelineOpen}
+                onOpenChange={setIsTimelineOpen}
+            />
 
-                        return (
-                            <Card key={index} className="overflow-hidden border-slate-200/60 dark:border-white/10 shadow-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm p-0">
-                                <div className="flex items-center p-4">
-                                    <div className={cn("rounded-lg mr-3 shadow-sm flex items-center justify-center overflow-hidden", card.bg, qontoCard ? "p-0" : "p-1.5")}>
-                                        <Icon className={cn(qontoCard ? "h-8 w-8" : "h-5 w-5", card.color)} />
-                                    </div>
-                                    <div className="flex-1 overflow-hidden">
-                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 leading-none mb-1">
-                                            {card.title}
-                                        </p>
-                                        {qontoCard && qontoError ? (
-                                            <div className="text-red-500 text-xs font-medium truncate">{qontoError}</div>
-                                        ) : qontoCard && isQontoLoading && qontoBalance === null ? (
-                                            <div className="h-4 w-20 bg-slate-200 dark:bg-slate-800 animate-pulse rounded mt-1" />
-                                        ) : (
-                                            <div className="text-lg font-bold">
-                                                <RollingNumber value={card.rawValue} />
-                                            </div>
-                                        )}
-                                    </div>
-                                    {qontoCard && (
-                                        <button
-                                            onClick={fetchQonto}
-                                            disabled={isQontoLoading}
-                                            className="p-2 ml-2 hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition-all active:scale-90"
-                                        >
-                                            <RefreshCw className={cn("h-4 w-4 text-blue-500", isQontoLoading && "animate-spin")} />
-                                        </button>
-                                    )}
-                                </div>
-                            </Card>
-                        );
-                    })}
+            <SimulationSheet
+                isOpen={isSimulationOpen}
+                onOpenChange={setIsSimulationOpen}
+            />
+
+            {/* NIVEAU 2 : PILOTAGE TACTIQUE */}
+            {level2Cards.length > 0 && (
+                <div className={cn(
+                    "grid gap-4",
+                    level2Cards.length === 1 ? "grid-cols-1" :
+                        level2Cards.length === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1 md:grid-cols-3"
+                )}>
+                    {level2Cards.map(card => (
+                        <StandardKpiCard key={card.id} title={card.title} value={card.value} description={card.description} icon={card.icon} color={card.color} isLoading={card.isLoading} onRefresh={card.onRefresh} />
+                    ))}
                 </div>
+            )}
 
-                <Accordion type="single" collapsible className="w-full">
-                    <AccordionItem value="details" className="border-none">
-                        <AccordionTrigger className="flex-none w-fit mx-auto gap-2 py-2 px-6 bg-slate-200/50 dark:bg-slate-800/50 rounded-full text-slate-600 dark:text-slate-400 hover:no-underline text-[10px] font-bold uppercase tracking-widest transition-all items-center justify-center h-9 [&>svg]:translate-y-0 [&>svg]:size-3.5">
-                            Voir plus de détails
-                        </AccordionTrigger>
-                        <AccordionContent className="pt-4 space-y-3 px-0">
-                            <div className="grid gap-3">
-                                {secondaryCards.map((card, index) => {
-                                    const Icon = card.icon;
-                                    return (
-                                        <Card key={index} className="overflow-hidden border-slate-200/60 dark:border-white/10 shadow-sm bg-white/50 dark:bg-slate-900/40 backdrop-blur-sm p-0">
-                                            <div className="flex items-center p-4">
-                                                <div className={cn("p-2 rounded-lg mr-3", card.bg)}>
-                                                    <Icon className={cn("h-5 w-5", card.color)} />
-                                                </div>
-                                                <div>
-                                                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 leading-none mb-1">
-                                                        {card.title}
-                                                    </p>
-                                                    <div className="text-lg font-bold">
-                                                        <RollingNumber value={card.rawValue} />
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </Card>
-                                    );
-                                })}
-                            </div>
-                        </AccordionContent>
-                    </AccordionItem>
-                </Accordion>
-            </div>
+            {/* NIVEAU 3 : ANALYSE OPÉRATIONNELLE */}
+            {level3Cards.length > 0 && (
+                <div className="border-slate-200 dark:border-white/5 bg-white dark:bg-slate-900/20 shadow-sm dark:shadow-none backdrop-blur-sm rounded-xl overflow-hidden px-6 border">
+                    <button
+                        onClick={() => setIsAccordionOpen(!isAccordionOpen)}
+                        className="w-full flex items-center justify-between py-4 group"
+                    >
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400 dark:text-slate-500 whitespace-nowrap">Indicateurs Secondaires</h3>
+                        <ChevronDown
+                            className={cn(
+                                "text-muted-foreground size-4 transition-transform duration-500",
+                                isAccordionOpen && "rotate-180"
+                            )}
+                        />
+                    </button>
+
+                    <AnimatePresence initial={false}>
+                        {isAccordionOpen && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{
+                                    height: "auto",
+                                    opacity: 1,
+                                    transition: {
+                                        height: { type: "spring", stiffness: 100, damping: 20 },
+                                        opacity: { duration: 0.2 }
+                                    }
+                                }}
+                                exit={{
+                                    height: 0,
+                                    opacity: 0,
+                                    transition: {
+                                        height: { type: "spring", stiffness: 100, damping: 20 },
+                                        opacity: { duration: 0.1 }
+                                    }
+                                }}
+                                className="overflow-hidden"
+                            >
+                                <motion.div
+                                    initial="hidden"
+                                    animate="visible"
+                                    variants={{
+                                        visible: {
+                                            transition: {
+                                                staggerChildren: 0.05,
+                                                delayChildren: 0.1
+                                            }
+                                        }
+                                    }}
+                                    className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6 pb-6"
+                                >
+                                    {level3Cards.map((kpi) => (
+                                        <motion.div
+                                            key={kpi.id}
+                                            variants={{
+                                                hidden: { opacity: 0, y: 10 },
+                                                visible: {
+                                                    opacity: 1,
+                                                    y: 0,
+                                                    transition: {
+                                                        type: "spring",
+                                                        stiffness: 100,
+                                                        damping: 15
+                                                    }
+                                                }
+                                            }}
+                                        >
+                                            <CompactKpiCard title={kpi.title} value={kpi.value} icon={kpi.icon} unit={kpi.unit as "€" | "%" | undefined} variant={kpi.variant as "invest" | undefined} />
+                                        </motion.div>
+                                    ))}
+                                </motion.div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
+            )}
         </div>
+    );
+}
+
+function StandardKpiCard({ title, value, description, icon: Icon, color, isLoading, onRefresh }: {
+    title: string, value: number, description: string, icon: React.ElementType, color: string, isLoading?: boolean, onRefresh?: () => void
+}) {
+    return (
+        <Card className="border-slate-200 dark:border-white/5 bg-white dark:bg-slate-900/20 shadow-sm dark:shadow-none backdrop-blur-sm overflow-hidden group">
+            <CardContent className="px-6 py-3 flex items-center gap-3">
+                <div className={cn("p-1.5 rounded-xl bg-slate-100 dark:bg-white/5 transition-colors group-hover:bg-slate-200 dark:group-hover:bg-white/10 shrink-0", color)}>
+                    {onRefresh ? (
+                        <button onClick={onRefresh} disabled={isLoading} className="flex items-center justify-center active:rotate-180 transition-transform duration-500">
+                            <Icon className={cn("h-5 w-5", isLoading && "animate-spin")} />
+                        </button>
+                    ) : (
+                        <Icon className="h-5 w-5" />
+                    )}
+                </div>
+                <div className="space-y-0.5 min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 truncate">{title}</p>
+                    <div className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white line-clamp-1">
+                        <RollingNumber value={value} />
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-semibold truncate opacity-60">{description}</p>
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+function CompactKpiCard({ title, value, unit, icon: Icon, variant }: { title: string, value: number, unit?: "€" | "%", icon: React.ElementType, variant?: "invest" }) {
+    return (
+        <Card className="border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-slate-900/10 hover:bg-slate-100 dark:hover:bg-slate-900/40 transition-colors shadow-none">
+            <CardContent className="px-3 py-1.5 flex flex-col gap-0.5">
+                <div className="flex items-center justify-between">
+                    <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-slate-500 truncate mr-2">{title}</p>
+                    <Icon className={cn("h-3 w-3", variant === "invest" ? "text-violet-500" : "text-slate-400 dark:text-slate-600")} />
+                </div>
+                <div className="text-lg font-semibold text-slate-900 dark:text-slate-200">
+                    <RollingNumber value={value} unit={unit} className="text-xl" />
+                </div>
+            </CardContent>
+        </Card>
     );
 }

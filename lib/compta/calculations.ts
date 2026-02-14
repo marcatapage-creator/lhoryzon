@@ -1,105 +1,115 @@
-import { Operation, FiscalProfile, Month, MONTHS } from "./types";
-
-export interface Totals {
-    incomeTTC: number;
-    realTreasuryOutflow: number;
-    projectedTreasury: number;
-    profitHT: number;
-    vatNet: number;
-    btcTotal: number;
-    perTotal: number;
-    netPocket: number;
-    totalExpenses: number; // Added for detailed view
-}
-
+import { Operation, FiscalProfile, Month, MONTHS, PaymentEvent, MoneyCents, RateBps, Totals } from "./types";
+export type { Operation, FiscalProfile, Month, PaymentEvent, MoneyCents, RateBps, Totals };
+export { MONTHS };
+import { money, mulRate, splitVat, calculateParamsHash } from "./money";
+import { getBusinessParams } from "./tax_params/registry";
+import { getRegimeCapabilities } from "./tax_params/capabilities";
 
 // --- Helpers ---
-export const calculateHT = (amountTTC: number, vatRate: number = 20) => {
-    return amountTTC / (1 + vatRate / 100);
-};
-
-export const calculateVAT = (amountTTC: number, vatRate: number = 20) => {
-    return amountTTC - calculateHT(amountTTC, vatRate);
-};
+export const isVatCategory = (item: { category?: string }) => item.category === 'vat';
+export const isSpecialCategory = (item: { category?: string }) => ['vat', 'social', 'tax'].includes(item.category || '');
+export const isBtcCategory = (item: { category?: string }) => item.category === 'btc';
+export const isPerCategory = (item: { category?: string }) => item.category === 'per';
+export const calculateHT = (ttc: number): number => ttc / 1.2;
+export const calculateVAT = (ttc: number): number => ttc - (ttc / 1.2);
 
 // --- Net Pocket Logic ---
 
 export const calculateNetCashFlow = (
-    incomeTTC: number,
-    proExpensesTTC: number,
-    otherExpenses: number,
-    profile: FiscalProfile | null
+    incomeTTC_cents: MoneyCents,
+    proExpensesTTC_cents: MoneyCents,
+    otherExpenses_cents: MoneyCents,
+    profile: FiscalProfile | null,
+    year: number = 2024
 ): {
-    vatCollected: number;
-    socialCharges: number;
-    taxes: number;
-    netPocket: number;
+    vatCollected_cents: MoneyCents;
+    socialCharges_cents: MoneyCents;
+    taxes_cents: MoneyCents;
+    netPocket_cents: MoneyCents;
 } => {
     if (!profile) {
         return {
-            vatCollected: 0,
-            socialCharges: 0,
-            taxes: 0,
-            netPocket: incomeTTC - proExpensesTTC - otherExpenses
+            vatCollected_cents: 0,
+            socialCharges_cents: 0,
+            taxes_cents: 0,
+            netPocket_cents: incomeTTC_cents - proExpensesTTC_cents - otherExpenses_cents
         };
     }
 
-    let vatCollected = 0;
+    let vatCollected_cents = 0;
 
     // 2. VAT Calculation
     if (profile.vatEnabled) {
-        // AmountTTC - (AmountTTC / 1.2)
-        vatCollected = incomeTTC - (incomeTTC / 1.2);
+        vatCollected_cents = splitVat(incomeTTC_cents, 2000).vat_cents;
     }
 
     // 4. Social & Taxes logic based on Profile
-    let socialCharges = 0;
-    let taxes = 0;
-    let netPocket = 0;
+    let socialCharges_cents = 0;
+    let taxes_cents = 0;
+    let netPocket_cents = 0;
+
+    const params = getBusinessParams(year, profile.status);
+    const incomeHT_cents = incomeTTC_cents - vatCollected_cents;
 
     if (profile.status === 'micro') {
-        // Micro: Flat rate on TURNOVER (Gross Income)
-        // Social ~22%
-        socialCharges = incomeTTC * 0.22;
-        // Tax ~2.2% or 0 check
-        taxes = incomeTTC * 0.022;
-
-        netPocket = incomeTTC - proExpensesTTC - otherExpenses - socialCharges - taxes;
+        socialCharges_cents = mulRate(incomeTTC_cents, params.socialRate_bps);
+        taxes_cents = mulRate(incomeTTC_cents, params.incomeTaxRate_bps);
+        netPocket_cents = incomeTTC_cents - proExpensesTTC_cents - otherExpenses_cents - socialCharges_cents - taxes_cents;
 
     } else if (profile.status === 'ei' || profile.status === 'url_ir') {
-        // Reel (IR):
-        const expensesHT = proExpensesTTC / (profile.vatEnabled ? 1.2 : 1);
-        const taxableBase = (incomeTTC - vatCollected) - expensesHT;
+        const expensesHT_cents = profile.vatEnabled ? splitVat(proExpensesTTC_cents, 2000).net_cents : proExpensesTTC_cents;
+        const taxableBase_cents = incomeHT_cents - expensesHT_cents;
 
-        // Rough estimate if we don't have real social/tax data passed in this scope
-        socialCharges = Math.max(0, taxableBase * 0.35);
-        taxes = Math.max(0, taxableBase * 0.10);
+        socialCharges_cents = Math.max(0, mulRate(taxableBase_cents, params.socialRate_bps));
+        taxes_cents = Math.max(0, mulRate(taxableBase_cents, params.incomeTaxRate_bps));
 
-        netPocket = incomeTTC - vatCollected - proExpensesTTC - otherExpenses - socialCharges - taxes;
+        netPocket_cents = incomeHT_cents - proExpensesTTC_cents - otherExpenses_cents - socialCharges_cents - taxes_cents;
 
     } else if (profile.status === 'sas_is') {
-        // IS (Company):
-        const expensesHT = proExpensesTTC / 1.2;
-        const result = (incomeTTC - vatCollected) - expensesHT;
+        const expensesHT_cents = splitVat(proExpensesTTC_cents, 2000).net_cents;
+        const result_cents = incomeHT_cents - expensesHT_cents;
 
-        if (result > 0) {
-            const isTax = result * 0.15;
-            taxes = isTax;
-            const distributable = result - isTax;
-            const flatTax = distributable * 0.30;
-            netPocket = distributable - flatTax - otherExpenses;
+        if (result_cents > 0) {
+            const isTax_cents = mulRate(result_cents, params.isReducedRate_bps); // Simplified: assuming reduced rate for simulation
+            taxes_cents = isTax_cents;
+            const distributable_cents = result_cents - isTax_cents;
+            const flatTax_cents = mulRate(distributable_cents, params.flatTaxRate_bps);
+            netPocket_cents = distributable_cents - flatTax_cents - otherExpenses_cents;
         } else {
-            taxes = 0;
-            netPocket = -otherExpenses;
+            taxes_cents = 0;
+            netPocket_cents = -otherExpenses_cents;
         }
     }
 
     return {
-        vatCollected,
-        socialCharges,
-        taxes,
-        netPocket: Math.max(0, netPocket)
+        vatCollected_cents,
+        socialCharges_cents,
+        taxes_cents,
+        netPocket_cents: Math.max(0, netPocket_cents)
     };
+};
+
+
+/**
+ * Distributes a total amount of cents into N parts, 
+ * ensuring that the sum of parts exactly equals the total.
+ * Residual cents are injected into the last part.
+ */
+export const distributeCents = (total_cents: MoneyCents, count: number): MoneyCents[] => {
+    if (count <= 0) return [];
+    const base = Math.floor(total_cents / count);
+    const parts = new Array(count).fill(base);
+    const currentSum = base * count;
+    const residual = total_cents - currentSum;
+
+    // Distribute residual one by one to avoid large spikes in the last month
+    // although for small amounts math.floor + sum is fine, this is more "fintech"
+    for (let i = 0; i < Math.abs(residual); i++) {
+        const idx = i % count;
+        parts[idx] += residual > 0 ? 1 : -1;
+    }
+
+    return parts;
 };
 
 
@@ -108,192 +118,356 @@ export const calculateNetCashFlow = (
 export const computeFilteredTotals = (
     op: Operation,
     monthFilter: Month | "all",
-    profile: FiscalProfile | null = null
+    profile: FiscalProfile | null = null,
+    strictMode: boolean = false
 ): Totals => {
-    let incomeTTC = 0;
-    let proExpenses = 0;
-    let social = 0;
-    let tax = 0;
-    let personal = 0;
-    let other = 0;
+    const status = profile?.status || 'bnc';
+    const params = getBusinessParams(op.year, status);
+    const caps = getRegimeCapabilities(status);
+    const engineVersion = "2.2.0";
 
-    // Filter Logic
+    // Stable Fingerprint including context
+    const fingerPrintContext = {
+        year: op.year,
+        regime: status,
+        engineVersion,
+        params
+    };
+    const fiscalHash = calculateParamsHash(fingerPrintContext);
+
+    const traceLines: string[] = [
+        `Audit Log: ${monthFilter}, Year ${op.year}`,
+        `Regime: ${status}`,
+        `Fiscal Hash: ${fiscalHash}`
+    ];
+
+    let incomeTTC_cents = 0;
+    let social_cents = 0;
+    let tax_cents = 0;
+    let pro_cents = 0;
+    let personal_cents = 0;
+    let other_cents = 0;
+    let btc_cents = 0;
+    let per_cents = 0;
+    let vat_net_cents = 0;
+
+    // 1. Income Calculation
     if (monthFilter === "all") {
-        incomeTTC = Object.values(op.income.salaryTTCByMonth).reduce((acc, val) => acc + val, 0) + op.income.otherIncomeTTC;
+        incomeTTC_cents = money.add(
+            ...Object.values(op.income.salaryTTCByMonth),
+            op.income.otherIncomeTTC_cents
+        );
 
-        // Pro Expenses: Override > 0 takes precedence
-        if (op.expenses.pro.totalOverrideTTC && op.expenses.pro.totalOverrideTTC > 0) {
-            proExpenses = op.expenses.pro.totalOverrideTTC;
-        } else {
-            proExpenses = op.expenses.pro.items.reduce((acc, i) => acc + i.amountTTC * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1), 0);
-        }
-
-        // Social: Sum of all months if schedule exists, otherwise yearly total
-        // URSSAF
-        if (op.expenses.social.urssafByMonth) {
-            social += Object.values(op.expenses.social.urssafByMonth).reduce((acc, val) => acc + val, 0);
-        } else {
-            const m = op.expenses.social.urssafPeriodicity === 'monthly' ? 12 : op.expenses.social.urssafPeriodicity === 'quarterly' ? 4 : 1;
-            social += op.expenses.social.urssaf * m;
-        }
-        // IRCEC
-        if (op.expenses.social.ircecByMonth) {
-            social += Object.values(op.expenses.social.ircecByMonth).reduce((acc, val) => acc + val, 0);
-        } else {
-            const m = op.expenses.social.ircecPeriodicity === 'monthly' ? 12 : op.expenses.social.ircecPeriodicity === 'quarterly' ? 4 : 1;
-            social += op.expenses.social.ircec * m;
-        }
-
-        // Taxes
-        if (op.expenses.taxes.incomeTaxByMonth) {
-            tax += Object.values(op.expenses.taxes.incomeTaxByMonth).reduce((acc, val) => acc + val, 0);
-        } else {
-            const m = op.expenses.taxes.incomeTaxPeriodicity === 'monthly' ? 12 : op.expenses.taxes.incomeTaxPeriodicity === 'quarterly' ? 4 : 1;
-            tax += op.expenses.taxes.incomeTax * m;
-        }
-
-        personal = op.expenses.personal.items.reduce((acc, i) => acc + i.amount * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1), 0);
-
-        // Other items handling
-        other = op.expenses.otherItems.reduce((acc, i) => {
-            if (i.selectedMonths && i.selectedMonths.length > 0) {
-                return acc + i.amount * i.selectedMonths.length;
-            }
-            if (i.periodicity === 'monthly') {
-                // Check durationMonths if defined
-                return acc + i.amount * (i.durationMonths || 12); // Default to 12 if no duration? or 1? Schema says default 1. But logic says "Monthly". Usually means x12 unless duration constraint.
-                // Actually schema says durationMonths min 1 max 12 default 1.
-                // But wait, if it's monthly recurrence indefinitely, it should be 12.
-                // The wizard sets durationMonths to 1 by default but has "selectedMonths" logic.
-                // Let's assume: if selectedMonths is empty, use durationMonths (if set), else 12?
-                // Let's trust durationMonths if it's monthly.
-            }
-            return acc + i.amount * (i.periodicity === 'quarterly' ? 4 : 1);
-        }, 0);
-
-    } else {
-        // MONTHLY VIEW
-        incomeTTC = op.income.salaryTTCByMonth[monthFilter] || 0;
-
-        // Other Income: Check specific months
-        if (op.income.otherIncomeSelectedMonths.includes(monthFilter)) {
-            incomeTTC += op.income.otherIncomeTTC / op.income.otherIncomeSelectedMonths.length;
-        }
-
-        // Pro Expenses
-        if (op.expenses.pro.totalOverrideTTC && op.expenses.pro.totalOverrideTTC > 0) {
-            // Simplified: Divide by 12
-            proExpenses = op.expenses.pro.totalOverrideTTC / 12;
-        } else {
-            proExpenses = op.expenses.pro.items.reduce((acc, i) => {
-                let amount = 0;
-                if (i.periodicity === 'monthly') amount = i.amountTTC;
-                else if (i.periodicity === 'quarterly') amount = i.amountTTC / 3; // Approx
-                else amount = i.amountTTC / 12; // Yearly
-                return acc + amount;
-            }, 0);
-        }
-
-        // Social
-        // URSSAF
-        if (op.expenses.social.urssafByMonth) {
-            social += op.expenses.social.urssafByMonth[monthFilter] || 0;
-        } else {
-            // If periodic, check if this month is a payment month? Too complex.
-            // Let's smooth it out: Total / 12 for monthly view is standard for cash flow projection usually, 
-            // unless we want strict cash view. Dashboard says "Trésorerie / Mois".
-            // Let's smooth.
-            const totalUrssaf = op.expenses.social.urssaf * (op.expenses.social.urssafPeriodicity === 'monthly' ? 12 : op.expenses.social.urssafPeriodicity === 'quarterly' ? 4 : 1);
-            social += totalUrssaf / 12;
-        }
-        // IRCEC
-        if (op.expenses.social.ircecByMonth) {
-            social += op.expenses.social.ircecByMonth[monthFilter] || 0;
-        } else {
-            const totalIrcec = op.expenses.social.ircec * (op.expenses.social.ircecPeriodicity === 'monthly' ? 12 : op.expenses.social.ircecPeriodicity === 'quarterly' ? 4 : 1);
-            social += totalIrcec / 12;
-        }
-
-        // Tax
-        if (op.expenses.taxes.incomeTaxByMonth) {
-            tax += op.expenses.taxes.incomeTaxByMonth[monthFilter] || 0;
-        } else {
-            const totalTax = op.expenses.taxes.incomeTax * (op.expenses.taxes.incomeTaxPeriodicity === 'monthly' ? 12 : op.expenses.taxes.incomeTaxPeriodicity === 'quarterly' ? 4 : 1);
-            tax += totalTax / 12;
-        }
-
-        personal = op.expenses.personal.items.reduce((acc, i) => {
-            // Smooth
+        (op.income.items || []).forEach(i => {
             const m = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
-            return acc + (i.amount * m) / 12;
-        }, 0);
+            incomeTTC_cents += (i.amount_ttc_cents * m);
+        });
+    } else {
+        incomeTTC_cents += (op.income.salaryTTCByMonth[monthFilter] || 0);
 
-        other = op.expenses.otherItems.reduce((acc, i) => {
-            if (i.selectedMonths && i.selectedMonths.length > 0) {
-                return i.selectedMonths.includes(monthFilter) ? i.amount : 0;
-            }
-            // If durationMonths defined
-            // How do we request "start month"? We don't have it.
-            // Assumption: spreading heavily relies on "selectedMonths".
-            // If monthly without selectedMonths, we assume all year or smooth.
-            // Let's smooth.
-
-            let total = 0;
-            if (i.periodicity === 'monthly') {
-                total = i.amount * (i.durationMonths || 12);
+        if (op.income.otherIncomeSelectedMonths.includes(monthFilter)) {
+            const count = op.income.otherIncomeSelectedMonths.length || 1;
+            const idx = op.income.otherIncomeSelectedMonths.indexOf(monthFilter);
+            if (strictMode) {
+                const val = op.income.otherIncomeTTC_cents;
+                const isFirstMonth = op.income.otherIncomeSelectedMonths[0] === monthFilter;
+                if (isFirstMonth) {
+                    incomeTTC_cents += val;
+                    traceLines.push(`StrictCash: Other income full payment in ${monthFilter}`);
+                }
             } else {
-                total = i.amount * (i.periodicity === 'quarterly' ? 4 : 1);
+                const distributed = distributeCents(op.income.otherIncomeTTC_cents, count);
+                incomeTTC_cents += distributed[idx];
             }
-            return acc + total / 12;
-        }, 0);
+        }
+
+        (op.income.items || []).forEach(i => {
+            const isDueMonth = i.periodicity === 'monthly' ||
+                (i.periodicity === 'quarterly' && ["Jan", "Apr", "Jul", "Oct"].includes(monthFilter)) ||
+                (i.periodicity === 'yearly' && monthFilter === "Jan");
+
+            if (strictMode) {
+                if (isDueMonth) {
+                    incomeTTC_cents += i.amount_ttc_cents;
+                    traceLines.push(`StrictCash: ${i.label} payment due in ${monthFilter}`);
+                }
+            } else {
+                const count = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+                const distributed = distributeCents(i.amount_ttc_cents * count, 12);
+                incomeTTC_cents += distributed[MONTHS.indexOf(monthFilter)];
+            }
+        });
     }
 
+    // 2. Pro Expenses Calculation
+    if (monthFilter === "all") {
+        const proItems = op.expenses.pro.items || [];
+        const proItems_total = proItems.reduce((acc, i) => {
+            const count = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+            return acc + (i.amount_ttc_cents * count);
+        }, 0);
+        pro_cents = op.expenses.pro.totalOverrideTTC_cents ? Number(op.expenses.pro.totalOverrideTTC_cents) : proItems_total;
+    } else {
+        (op.expenses.pro.items || []).forEach(i => {
+            const isDueMonth = i.periodicity === 'monthly' ||
+                (i.periodicity === 'quarterly' && ["Jan", "Apr", "Jul", "Oct"].includes(monthFilter)) ||
+                (i.periodicity === 'yearly' && monthFilter === "Jan");
 
-    // Net Pocket Calc
-    // We pass explicit Social/Tax if we want to override the profile estimation, 
-    // OR we rely purely on profile estimation for "Net Pocket" and use stored values for "Sorties Réelles"
-    // mixing both is tricky.
-    // For "Sorties Réelles" (Cash Flow Out), we MUST use what is actually paid (stored).
+            if (strictMode) {
+                if (isDueMonth) pro_cents += i.amount_ttc_cents;
+            } else {
+                const count = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+                const distributed = distributeCents(i.amount_ttc_cents * count, 12);
+                pro_cents += distributed[MONTHS.indexOf(monthFilter)];
+            }
+        });
 
-    const realTreasuryOutflow = proExpenses + social + tax + personal + other;
+        if (op.expenses.pro.totalOverrideTTC_cents && !strictMode) {
+            const distributed = distributeCents(Number(op.expenses.pro.totalOverrideTTC_cents), 12);
+            pro_cents = distributed[MONTHS.indexOf(monthFilter)];
+        }
+    }
 
-    // For "Net Pocket", we use the profile logic
-    const { netPocket, vatCollected, taxes: estimatedTax } = calculateNetCashFlow(
-        incomeTTC,
-        proExpenses,
-        personal + other, // Personal/Other are deducted from Net Pocket
-        profile
-    );
+    // 3. Personal & Other Expenses Calculation
+    if (monthFilter === "all") {
+        // Personal
+        (op.expenses.personal.items || []).forEach(i => {
+            const count = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+            const val = i.amount_cents * count;
 
-    // Projected Treasury
-    // Start Cash + Income - Outflow
-    const projectedTreasury = op.cashCurrent + incomeTTC - realTreasuryOutflow;
+            if (i.category === 'btc') btc_cents += val;
+            else if (i.category === 'per') per_cents += val;
+            else personal_cents += val;
+        });
 
-    // Profit HT (Approx)
-    // If VAT enabled: IncomeHT - ExpensesHT
-    const incomeHT = profile?.vatEnabled ? incomeTTC / 1.2 : incomeTTC;
-    const expenseHT = profile?.vatEnabled ? proExpenses / 1.2 : proExpenses;
-    const profitHT = incomeHT - expenseHT;
+        // Other (Split into Other, BTC, PER - Legacy support or specific other items)
+        (op.expenses.otherItems || []).forEach(i => {
+            let val = 0;
+            if (i.selectedMonths && i.selectedMonths.length > 0) {
+                val = (i.amount_cents * i.selectedMonths.length);
+            } else {
+                const count = i.periodicity === 'monthly' ? (i.durationMonths || 12) : i.periodicity === 'quarterly' ? 4 : 1;
+                val = (i.amount_cents * count);
+            }
 
-    // VAT Net
-    // If we have profile: Estimated
-    const vatNet = vatCollected; // - Deductible? (Included in logic above technically)
-    // Let's simplify: Net VAT to pay = Collected - Deductible on Expenses
-    // Deductible = ExpensesTTC - ExpensesHT
-    const vatDeductible = proExpenses - (proExpenses / 1.2);
-    const finalVatNet = profile?.vatEnabled ? Math.max(0, vatCollected - vatDeductible) : 0;
+            if (i.category === 'btc') btc_cents += val;
+            else if (i.category === 'per') per_cents += val;
+            else other_cents += val;
+        });
+    } else {
+        // Monthly Personal
+        (op.expenses.personal.items || []).forEach(i => {
+            const isDueMonth = i.periodicity === 'monthly' ||
+                (i.periodicity === 'quarterly' && ["Jan", "Apr", "Jul", "Oct"].includes(monthFilter)) ||
+                (i.periodicity === 'yearly' && monthFilter === "Jan");
 
+            let val = 0;
+            if (strictMode) {
+                if (isDueMonth) val = i.amount_cents;
+            } else {
+                const count = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+                const distributed = distributeCents(i.amount_cents * count, 12);
+                val = distributed[MONTHS.indexOf(monthFilter)];
+            }
+
+            if (i.category === 'btc') btc_cents += val;
+            else if (i.category === 'per') per_cents += val;
+            else personal_cents += val;
+        });
+
+        // Monthly Other
+        (op.expenses.otherItems || []).forEach(i => {
+            let val = 0;
+            if (i.selectedMonths && i.selectedMonths.length > 0) {
+                if (i.selectedMonths.includes(monthFilter)) {
+                    // Strict: full amount if selected? Or distributed?
+                    // Assuming per-month input means "amount per selected month" usually, 
+                    // OR total amount spread? 
+                    // The schema says `amount_cents` is the *value*. 
+                    // If selectedMonths is present, usually `amount_cents` is the recurrence value?
+                    // Re-reading usage: "Manual items" logic usually treats amount as "per occurrence".
+                    val = Math.round(i.amount_cents);
+                }
+            } else {
+                const isDueMonth = i.periodicity === 'monthly' ||
+                    (i.periodicity === 'quarterly' && ["Jan", "Apr", "Jul", "Oct"].includes(monthFilter)) ||
+                    (i.periodicity === 'yearly' && monthFilter === "Jan");
+
+                // Duration check
+                let active = true;
+                if (i.periodicity === 'monthly' && i.durationMonths) {
+                    const monthIdx = MONTHS.indexOf(monthFilter);
+                    if (monthIdx >= i.durationMonths) active = false;
+                }
+
+                if (active) {
+                    if (strictMode) {
+                        if (isDueMonth) val = i.amount_cents;
+                    } else {
+                        const effectiveDuration = (i.periodicity === 'monthly' && i.durationMonths) ? i.durationMonths : 12;
+                        const annualVal = i.amount_cents * (i.periodicity === 'monthly' ? effectiveDuration : i.periodicity === 'quarterly' ? 4 : 1);
+                        const distributed = distributeCents(annualVal, 12);
+                        val = distributed[MONTHS.indexOf(monthFilter)];
+                    }
+                }
+            }
+
+            if (i.category === 'btc') btc_cents += val;
+            else if (i.category === 'per') per_cents += val;
+            else other_cents += val;
+        });
+    }
+
+    // 4. Social & Taxes Calculation
+    if (monthFilter === "all") {
+        if (caps.hasSocial) {
+            if (op.expenses.social.urssafByMonth && Object.keys(op.expenses.social.urssafByMonth).length > 0) {
+                social_cents += Object.values(op.expenses.social.urssafByMonth).reduce((acc, val) => acc + val, 0);
+            } else {
+                const m = op.expenses.social.urssafPeriodicity === 'monthly' ? 12 : op.expenses.social.urssafPeriodicity === 'quarterly' ? 4 : 1;
+                social_cents += op.expenses.social.urssaf_cents * m;
+            }
+            if (op.expenses.social.ircecByMonth && Object.keys(op.expenses.social.ircecByMonth).length > 0) {
+                social_cents += Object.values(op.expenses.social.ircecByMonth).reduce((acc, val) => acc + val, 0);
+            } else {
+                const m = op.expenses.social.ircecPeriodicity === 'monthly' ? 12 : op.expenses.social.ircecPeriodicity === 'quarterly' ? 4 : 1;
+                social_cents += op.expenses.social.ircec_cents * m;
+            }
+        }
+        if (caps.hasIncomeTax) {
+            if (op.expenses.taxes.incomeTaxByMonth && Object.keys(op.expenses.taxes.incomeTaxByMonth).length > 0) {
+                tax_cents += Object.values(op.expenses.taxes.incomeTaxByMonth).reduce((acc, val) => acc + val, 0);
+            } else {
+                const m = op.expenses.taxes.incomeTaxPeriodicity === 'monthly' ? 12 : op.expenses.taxes.incomeTaxPeriodicity === 'quarterly' ? 4 : 1;
+                tax_cents += op.expenses.taxes.incomeTax_cents * m;
+            }
+        }
+        if (caps.hasIs) {
+            const isVal = mulRate(incomeTTC_cents, params.isReducedRate_bps);
+            tax_cents += isVal;
+            traceLines.push(`CapabilityIS: IS estimated at ${isVal} cents`);
+        }
+    } else {
+        if (caps.hasSocial) {
+            social_cents += (op.expenses.social.urssafByMonth?.[monthFilter] ?? (op.expenses.social.urssafPeriodicity === 'monthly' ? op.expenses.social.urssaf_cents : 0));
+            social_cents += (op.expenses.social.ircecByMonth?.[monthFilter] ?? (op.expenses.social.ircecPeriodicity === 'monthly' ? op.expenses.social.ircec_cents : 0));
+        }
+        if (caps.hasIncomeTax) {
+            tax_cents += (op.expenses.taxes.incomeTaxByMonth?.[monthFilter] ?? (op.expenses.taxes.incomeTaxPeriodicity === 'monthly' ? op.expenses.taxes.incomeTax_cents : 0));
+        }
+    }
+
+    // 5. VAT Logic
+    if (profile?.vatEnabled) {
+        let vatCollected = 0;
+        let vatDeductible = 0;
+
+        // A. Collected VAT
+        if (monthFilter === "all") {
+            let preciseVat = 0;
+            preciseVat += splitVat(money.add(...Object.values(op.income.salaryTTCByMonth)), 2000).vat_cents;
+            preciseVat += splitVat(op.income.otherIncomeTTC_cents, op.income.otherIncomeVATRate_bps).vat_cents;
+            (op.income.items || []).forEach(i => {
+                const m = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+                preciseVat += splitVat(i.amount_ttc_cents * m, i.vatRate_bps).vat_cents;
+            });
+            vatCollected = preciseVat;
+        } else {
+            let preciseVat = 0;
+            preciseVat += splitVat(op.income.salaryTTCByMonth[monthFilter] || 0, 2000).vat_cents;
+
+            if (op.income.otherIncomeSelectedMonths.includes(monthFilter)) {
+                if (strictMode) {
+                    if (op.income.otherIncomeSelectedMonths[0] === monthFilter) {
+                        preciseVat += splitVat(op.income.otherIncomeTTC_cents, op.income.otherIncomeVATRate_bps).vat_cents;
+                    }
+                } else {
+                    const count = op.income.otherIncomeSelectedMonths.length || 1;
+                    const portion = Math.round(op.income.otherIncomeTTC_cents / count);
+                    preciseVat += splitVat(portion, op.income.otherIncomeVATRate_bps).vat_cents;
+                }
+            }
+
+            (op.income.items || []).forEach(i => {
+                const isDue = i.periodicity === 'monthly' ||
+                    (i.periodicity === 'quarterly' && ["Jan", "Apr", "Jul", "Oct"].includes(monthFilter)) ||
+                    (i.periodicity === 'yearly' && monthFilter === "Jan");
+
+                if (strictMode) {
+                    if (isDue) preciseVat += splitVat(i.amount_ttc_cents, i.vatRate_bps).vat_cents;
+                } else {
+                    const annual = i.amount_ttc_cents * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1);
+                    preciseVat += splitVat(Math.round(annual / 12), i.vatRate_bps).vat_cents;
+                }
+            });
+            vatCollected = preciseVat;
+        }
+
+        // B. Deductible VAT
+        if (monthFilter === "all") {
+            if (op.expenses.pro.totalOverrideTTC_cents) {
+                vatDeductible += splitVat(Number(op.expenses.pro.totalOverrideTTC_cents), 2000).vat_cents;
+            } else {
+                (op.expenses.pro.items || []).forEach(i => {
+                    const m = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+                    vatDeductible += splitVat(i.amount_ttc_cents * m, i.vatRate_bps).vat_cents;
+                });
+            }
+        } else {
+            if (op.expenses.pro.totalOverrideTTC_cents && !strictMode) {
+                const monthlyVal = Math.round(Number(op.expenses.pro.totalOverrideTTC_cents) / 12);
+                vatDeductible += splitVat(monthlyVal, 2000).vat_cents;
+            } else {
+                (op.expenses.pro.items || []).forEach(i => {
+                    const isDue = i.periodicity === 'monthly' ||
+                        (i.periodicity === 'quarterly' && ["Jan", "Apr", "Jul", "Oct"].includes(monthFilter)) ||
+                        (i.periodicity === 'yearly' && monthFilter === "Jan");
+
+                    if (strictMode) {
+                        if (isDue) vatDeductible += splitVat(i.amount_ttc_cents, i.vatRate_bps).vat_cents;
+                    } else {
+                        const annual = i.amount_ttc_cents * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1);
+                        vatDeductible += splitVat(Math.round(annual / 12), i.vatRate_bps).vat_cents;
+                    }
+                });
+            }
+        }
+
+        vat_net_cents = Math.max(0, vatCollected - vatDeductible);
+
+        if (monthFilter === "all" && op.vatCarryover_cents > 0) {
+            vat_net_cents = Math.max(0, vat_net_cents - Number(op.vatCarryover_cents));
+        }
+
+        traceLines.push(`VAT Logic: Collected=${vatCollected}, Deductible=${vatDeductible}, Net=${vat_net_cents}`);
+    }
+
+    const trace = traceLines.length > 50
+        ? [...traceLines.slice(0, 45), `... (${traceLines.length - 49} hidden lines)`, ...traceLines.slice(-4)]
+        : traceLines;
+
+    const calcStatus = op.meta?.fiscalHash === fiscalHash ? 'fresh' : 'stale';
+
+    const businessExpenses = pro_cents + social_cents + tax_cents + vat_net_cents;
+    const totalOutflow = businessExpenses + personal_cents + other_cents + btc_cents + per_cents;
 
     return {
-        incomeTTC,
-        realTreasuryOutflow,
-        projectedTreasury,
-        profitHT,
-        vatNet: finalVatNet,
-        btcTotal: 0,
-        perTotal: 0,
-        netPocket,
-        totalExpenses: realTreasuryOutflow // Alias
+        incomeTTC_cents,
+        realTreasuryOutflow_cents: totalOutflow,
+        projectedTreasury_cents: op.cashCurrent_cents + incomeTTC_cents - totalOutflow,
+        profitHT_cents: incomeTTC_cents - pro_cents,
+        totalExpenses_cents: totalOutflow,
+        vatNet_cents: vat_net_cents,
+        socialTotal_cents: social_cents,
+        taxTotal_cents: tax_cents,
+        btcTotal_cents: btc_cents,
+        perTotal_cents: per_cents,
+        netPocket_cents: incomeTTC_cents - totalOutflow,
+        savingsRate_bps: incomeTTC_cents > 0 ? Math.round(((incomeTTC_cents - totalOutflow) * 10000) / incomeTTC_cents) : 0,
+        breakEvenPoint_cents: businessExpenses,
+        trace,
+        fiscalHash,
+        calcStatus
     };
 };
 
@@ -301,227 +475,204 @@ export const computeMultiYearTotals = (
     operations: Operation[],
     profile: FiscalProfile | null = null
 ): Totals => {
-    // Sum of all annual totals
     const allTotals = operations.map(op => computeFilteredTotals(op, "all", profile));
-
-    return allTotals.reduce((acc, t) => ({
-        incomeTTC: acc.incomeTTC + t.incomeTTC,
-        realTreasuryOutflow: acc.realTreasuryOutflow + t.realTreasuryOutflow,
-        projectedTreasury: t.projectedTreasury, // Take the latest one? Or sum? "Trésorerie Finale" is usually cumulative.
-        // Actually, projected treasury is a stock, not a flow.
-        // If we sum years, we might just want the latest year's end state?
-        // Or users want "Total Cash Accumulated"? 
-        // Let's assume "Projected Treasury" of the latest year is the global state.
-        // But "Net Pocket" etc are flows (Sums).
-        profitHT: acc.profitHT + t.profitHT,
-        vatNet: acc.vatNet + t.vatNet,
-        btcTotal: acc.btcTotal + t.btcTotal,
-        perTotal: acc.perTotal + t.perTotal,
-        netPocket: acc.netPocket + t.netPocket,
-        totalExpenses: acc.totalExpenses + t.totalExpenses
+    const combined = allTotals.reduce((acc, t) => ({
+        incomeTTC_cents: acc.incomeTTC_cents + t.incomeTTC_cents,
+        realTreasuryOutflow_cents: acc.realTreasuryOutflow_cents + t.realTreasuryOutflow_cents,
+        projectedTreasury_cents: t.projectedTreasury_cents,
+        profitHT_cents: acc.profitHT_cents + t.profitHT_cents,
+        vatNet_cents: acc.vatNet_cents + t.vatNet_cents,
+        socialTotal_cents: acc.socialTotal_cents + t.socialTotal_cents,
+        taxTotal_cents: acc.taxTotal_cents + t.taxTotal_cents,
+        btcTotal_cents: acc.btcTotal_cents + t.btcTotal_cents,
+        perTotal_cents: acc.perTotal_cents + t.perTotal_cents,
+        netPocket_cents: acc.netPocket_cents + t.netPocket_cents,
+        totalExpenses_cents: acc.totalExpenses_cents + t.totalExpenses_cents,
+        savingsRate_bps: 0 as RateBps,
+        breakEvenPoint_cents: 0 as MoneyCents,
+        trace: acc.trace.concat(t.trace),
+        fiscalHash: acc.fiscalHash === t.fiscalHash ? acc.fiscalHash : "multiple",
+        calcStatus: acc.calcStatus === t.calcStatus ? acc.calcStatus : 'recomputed'
     }), {
-        incomeTTC: 0,
-        realTreasuryOutflow: 0,
-        projectedTreasury: 0, // This logic is tricky for reduce
-        profitHT: 0,
-        vatNet: 0,
-        btcTotal: 0,
-        perTotal: 0,
-        netPocket: 0,
-        totalExpenses: 0
+        incomeTTC_cents: 0 as MoneyCents,
+        realTreasuryOutflow_cents: 0 as MoneyCents,
+        projectedTreasury_cents: 0 as MoneyCents,
+        profitHT_cents: 0 as MoneyCents,
+        vatNet_cents: 0 as MoneyCents,
+        socialTotal_cents: 0 as MoneyCents,
+        taxTotal_cents: 0 as MoneyCents,
+        btcTotal_cents: 0 as MoneyCents,
+        perTotal_cents: 0 as MoneyCents,
+        netPocket_cents: 0 as MoneyCents,
+        totalExpenses_cents: 0 as MoneyCents,
+        savingsRate_bps: 0 as RateBps,
+        breakEvenPoint_cents: 0 as MoneyCents,
+        trace: ["Combined Multi-Year Audit"],
+        fiscalHash: "",
+        calcStatus: 'fresh' // Initial status, will be updated by reduce
     });
-};
 
+    return {
+        ...combined,
+        savingsRate_bps: combined.incomeTTC_cents > 0 ? Math.round((combined.netPocket_cents * 10000) / combined.incomeTTC_cents) : 0,
+        breakEvenPoint_cents: Math.round(combined.realTreasuryOutflow_cents / (operations.length || 1))
+    };
+};
 
 // --- Charts & Distributions ---
 
-export const getExpenseDistribution = (op: Operation, monthFilter: Month | "all" = "all") => {
-    let pro = 0;
-    let personal = 0;
-    let socialTax = 0;
-    let other = 0;
+export const getExpenseDistribution = (op: Operation, monthFilter: Month | "all" = "all", profile: FiscalProfile | null = null) => {
+    const totals = computeFilteredTotals(op, monthFilter, profile);
+    let pro_cents = 0;
+    let personal_cents = 0;
+    let otherSum_cents = 0;
+    let social_cents = totals.socialTotal_cents;
+    let taxes_cents = totals.taxTotal_cents;
+    let tva_cents = totals.vatNet_cents;
+
+    const processDistItem = (item: any, amount_cents: MoneyCents, category: 'pro' | 'personal' | 'other') => { // eslint-disable-line @typescript-eslint/no-explicit-any
+        if (item.category === 'social') social_cents += amount_cents;
+        else if (item.category === 'tax') taxes_cents += amount_cents;
+        else {
+            if (category === 'personal') personal_cents += amount_cents;
+            else if (category === 'other') otherSum_cents += amount_cents;
+            else pro_cents += amount_cents;
+        }
+    };
 
     if (monthFilter === "all") {
-        if (op.expenses.pro.totalOverrideTTC && op.expenses.pro.totalOverrideTTC > 0) {
-            pro = op.expenses.pro.totalOverrideTTC;
+        if (op.expenses.pro.totalOverrideTTC_cents && op.expenses.pro.totalOverrideTTC_cents > 0) {
+            pro_cents += op.expenses.pro.totalOverrideTTC_cents;
         } else {
-            pro = op.expenses.pro.items.reduce((acc, i) => acc + i.amountTTC * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1), 0);
+            op.expenses.pro.items.forEach(i => {
+                const mult = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+                processDistItem(i, i.amount_ttc_cents * mult, 'pro');
+            });
         }
-
-        personal = op.expenses.personal.items.reduce((acc, i) => acc + i.amount * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1), 0);
-
-        // Social
-        if (op.expenses.social.urssafByMonth) socialTax += Object.values(op.expenses.social.urssafByMonth).reduce((a, b) => a + b, 0);
-        else socialTax += op.expenses.social.urssaf * (op.expenses.social.urssafPeriodicity === 'monthly' ? 12 : op.expenses.social.urssafPeriodicity === 'quarterly' ? 4 : 1);
-
-        if (op.expenses.social.ircecByMonth) socialTax += Object.values(op.expenses.social.ircecByMonth).reduce((a, b) => a + b, 0);
-        else socialTax += op.expenses.social.ircec * (op.expenses.social.ircecPeriodicity === 'monthly' ? 12 : op.expenses.social.ircecPeriodicity === 'quarterly' ? 4 : 1);
-
-        if (op.expenses.taxes.incomeTaxByMonth) socialTax += Object.values(op.expenses.taxes.incomeTaxByMonth).reduce((a, b) => a + b, 0);
-        else socialTax += op.expenses.taxes.incomeTax * (op.expenses.taxes.incomeTaxPeriodicity === 'monthly' ? 12 : op.expenses.taxes.incomeTaxPeriodicity === 'quarterly' ? 4 : 1);
-
-        other = op.expenses.otherItems.reduce((acc, i) => {
-            if (i.selectedMonths && i.selectedMonths.length > 0) return acc + i.amount * i.selectedMonths.length;
-            return acc + i.amount * (i.periodicity === 'monthly' ? (i.durationMonths || 12) : i.periodicity === 'quarterly' ? 4 : 1);
-        }, 0);
-
+        op.expenses.personal.items.forEach(i => {
+            const mult = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
+            processDistItem(i, i.amount_cents * mult, 'personal');
+        });
+        op.expenses.otherItems.forEach(i => {
+            let val_cents = 0;
+            if (i.selectedMonths && i.selectedMonths.length > 0) val_cents = i.amount_cents * i.selectedMonths.length;
+            else val_cents = i.amount_cents * (i.periodicity === 'monthly' ? (i.durationMonths || 12) : i.periodicity === 'quarterly' ? 4 : 1);
+            processDistItem(i, val_cents, 'other');
+        });
     } else {
-        // Monthly View
-        if (op.expenses.pro.totalOverrideTTC && op.expenses.pro.totalOverrideTTC > 0) {
-            pro = op.expenses.pro.totalOverrideTTC / 12;
-        } else {
-            pro = op.expenses.pro.items.reduce((acc, i) => {
-                let amount = 0;
-                if (i.periodicity === 'monthly') amount = i.amountTTC;
-                else if (i.periodicity === 'quarterly') amount = i.amountTTC / 3;
-                else amount = i.amountTTC / 12;
-                return acc + amount;
-            }, 0);
+        const annualDist = getExpenseDistribution(op, "all", profile);
+        const annualTotal = annualDist.reduce((acc, d) => acc + d.value, 0);
+        if (annualTotal > 0) {
+            annualDist.forEach(d => {
+                const ratio = d.value / annualTotal;
+                const monthlyValue = totals.realTreasuryOutflow_cents * ratio;
+                if (d.name === "Pro") pro_cents = monthlyValue;
+                else if (d.name === "Perso") personal_cents = monthlyValue;
+                else if (d.name === "Social") social_cents = monthlyValue;
+                else if (d.name === "Impôts") taxes_cents = monthlyValue;
+                else if (d.name === "TVA Net") tva_cents = monthlyValue;
+                else if (d.name === "Autre") otherSum_cents = monthlyValue;
+            });
         }
-
-        personal = op.expenses.personal.items.reduce((acc, i) => {
-            const m = i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1;
-            return acc + (i.amount * m) / 12;
-        }, 0);
-
-        // Social
-        if (op.expenses.social.urssafByMonth) socialTax += op.expenses.social.urssafByMonth[monthFilter] || 0;
-        else socialTax += (op.expenses.social.urssaf * (op.expenses.social.urssafPeriodicity === 'monthly' ? 12 : op.expenses.social.urssafPeriodicity === 'quarterly' ? 4 : 1)) / 12;
-
-        if (op.expenses.social.ircecByMonth) socialTax += op.expenses.social.ircecByMonth[monthFilter] || 0;
-        else socialTax += (op.expenses.social.ircec * (op.expenses.social.ircecPeriodicity === 'monthly' ? 12 : op.expenses.social.ircecPeriodicity === 'quarterly' ? 4 : 1)) / 12;
-
-        if (op.expenses.taxes.incomeTaxByMonth) socialTax += op.expenses.taxes.incomeTaxByMonth[monthFilter] || 0;
-        else socialTax += (op.expenses.taxes.incomeTax * (op.expenses.taxes.incomeTaxPeriodicity === 'monthly' ? 12 : op.expenses.taxes.incomeTaxPeriodicity === 'quarterly' ? 4 : 1)) / 12;
-
-        // Other
-        other = op.expenses.otherItems.reduce((acc, i) => {
-            if (i.selectedMonths && i.selectedMonths.length > 0) {
-                return i.selectedMonths.includes(monthFilter) ? i.amount : 0;
-            }
-            let total = i.amount * (i.periodicity === 'monthly' ? (i.durationMonths || 12) : i.periodicity === 'quarterly' ? 4 : 1);
-            return acc + total / 12;
-        }, 0);
     }
 
     return [
-        { name: "Pro", value: pro, fill: "#3b82f6", color: "#3b82f6" },
-        { name: "Perso", value: personal, fill: "#f43f5e", color: "#f43f5e" },
-        { name: "Social/Impôts", value: socialTax, fill: "#eab308", color: "#eab308" },
-        { name: "Autres", value: other, fill: "#a855f7", color: "#a855f7" }
+        { name: "Impôts", value: taxes_cents, fill: "#f97316", color: "#f97316" },
+        { name: "Perso", value: personal_cents, fill: "#a855f7", color: "#a855f7" },
+        { name: "Pro", value: pro_cents, fill: "#3b82f6", color: "#3b82f6" },
+        { name: "Social", value: social_cents, fill: "#ec4899", color: "#ec4899" },
+        { name: "TVA Net", value: tva_cents, fill: "#eab308", color: "#eab308" },
+        { name: "Autre", value: otherSum_cents, fill: "#64748b", color: "#64748b" }
     ].filter(x => x.value > 0);
 };
 
-export const getMultiYearExpenseDistribution = (operations: Operation[]) => {
-    let pro = 0;
-    let personal = 0;
-    let socialTax = 0;
-    let other = 0;
-
+export const getMultiYearExpenseDistribution = (operations: Operation[], profile: FiscalProfile | null = null) => {
+    let pro_cents = 0, personal_cents = 0, otherSum_cents = 0, social_cents = 0, taxes_cents = 0, tva_cents = 0;
     operations.forEach(op => {
-        pro += op.expenses.pro.items.reduce((acc, i) => acc + i.amountTTC, 0);
-        personal += op.expenses.personal.items.reduce((acc, i) => acc + i.amount * (i.periodicity === 'monthly' ? 12 : 1), 0);
-        socialTax += (op.expenses.social.urssaf + op.expenses.social.ircec) + op.expenses.taxes.incomeTax;
-        other += op.expenses.otherItems.reduce((acc, i) => acc + i.amount * (i.periodicity === 'monthly' ? 12 : 1), 0);
+        const dist = getExpenseDistribution(op, "all", profile);
+        dist.forEach(d => {
+            if (d.name === "Pro") pro_cents += d.value;
+            else if (d.name === "Perso") personal_cents += d.value;
+            else if (d.name === "Social") social_cents += d.value;
+            else if (d.name === "Impôts") taxes_cents += d.value;
+            else if (d.name === "TVA Net") tva_cents += d.value;
+            else if (d.name === "Autre") otherSum_cents += d.value;
+        });
     });
-
     return [
-        { name: "Pro", value: pro, fill: "#3b82f6", color: "#3b82f6" },
-        { name: "Perso", value: personal, fill: "#f43f5e", color: "#f43f5e" },
-        { name: "Social/Impôts", value: socialTax, fill: "#eab308", color: "#eab308" },
-        { name: "Autres", value: other, fill: "#a855f7", color: "#a855f7" }
+        { name: "Impôts", value: taxes_cents, fill: "#f97316", color: "#f97316" },
+        { name: "Perso", value: personal_cents, fill: "#a855f7", color: "#a855f7" },
+        { name: "Pro", value: pro_cents, fill: "#3b82f6", color: "#3b82f6" },
+        { name: "Social", value: social_cents, fill: "#ec4899", color: "#ec4899" },
+        { name: "TVA Net", value: tva_cents, fill: "#eab308", color: "#eab308" },
+        { name: "Autre", value: otherSum_cents, fill: "#64748b", color: "#64748b" }
     ].filter(x => x.value > 0);
 };
 
-const COLORS = [
-    "#3b82f6", // blue-500
-    "#ef4444", // red-500
-    "#10b981", // emerald-500
-    "#f59e0b", // amber-500
-    "#8b5cf6", // violet-500
-    "#ec4899", // pink-500
-    "#06b6d4", // cyan-500
-    "#84cc16", // lime-500
-    "#f97316", // orange-500
-    "#6366f1", // indigo-500
-];
+const COLORS = ["#3b82f6", "#ef4444", "#60a5fa", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16", "#f97316", "#6366f1"];
 
-export const getDetailedExpenseDistribution = (
-    op: Operation,
-    monthFilter: Month | "all",
-    type: "pro" | "personal"
-) => {
-    // Extract actual items
+export const getDetailedExpenseDistribution = (op: Operation, monthFilter: Month | "all", type: "pro" | "personal") => {
     const items = type === "pro" ? op.expenses.pro.items : op.expenses.personal.items;
-
     return items.map((item, index) => {
         const color = COLORS[index % COLORS.length];
+        const amount_cents = 'amount_ttc_cents' in item ? item.amount_ttc_cents : item.amount_cents;
+        const mult = item.periodicity === 'monthly' ? 12 : 1; // Simplified for detailed chart
         return {
             name: item.label,
             value: monthFilter === "all" ?
-                (item.periodicity === 'monthly' ? ('amountTTC' in item ? item.amountTTC : item.amount) * 12 : ('amountTTC' in item ? item.amountTTC : item.amount)) :
-                (item.periodicity === 'yearly' ? ('amountTTC' in item ? item.amountTTC : item.amount) / 12 : ('amountTTC' in item ? item.amountTTC : item.amount)),
-            fill: color,
-            color: color
+                amount_cents * mult :
+                Math.round((amount_cents * mult) / 12),
+            fill: color, color: color
         }
     }).filter(i => i.value > 0);
 };
 
-export const getMultiYearDetailedExpenseDistribution = (
-    operations: Operation[],
-    type: "pro" | "personal"
-) => {
+export const getMultiYearDetailedExpenseDistribution = (operations: Operation[], type: "pro" | "personal") => {
     const map = new Map<string, number>();
-
     operations.forEach(op => {
         const dist = getDetailedExpenseDistribution(op, "all", type);
         dist.forEach(d => {
-            const current = map.get(d.name) || 0;
-            map.set(d.name, current + d.value);
+            map.set(d.name, (map.get(d.name) || 0) + d.value);
         });
     });
-
     return Array.from(map.entries()).map(([name, value], index) => {
         const color = COLORS[index % COLORS.length];
         return { name, value, fill: color, color: color };
     });
 };
 
-
 export const getIncomeDistributionFromOp = (op: Operation, monthFilter: Month | "all") => {
-    let salary = 0;
-    let other = 0;
-
+    let salary_cents = 0, other_cents = 0;
     if (monthFilter === "all") {
-        salary = Object.values(op.income.salaryTTCByMonth).reduce((acc, val) => acc + val, 0);
-        other = op.income.otherIncomeTTC;
+        salary_cents = money.add(...Object.values(op.income.salaryTTCByMonth));
+        salary_cents += (op.income.items || []).reduce((acc, i) => acc + i.amount_ttc_cents * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1), 0);
+        other_cents = op.income.otherIncomeTTC_cents;
     } else {
-        salary = op.income.salaryTTCByMonth[monthFilter] || 0;
-        // other income distribution logic same as above
+        salary_cents = op.income.salaryTTCByMonth[monthFilter] || 0;
+        salary_cents += (op.income.items || []).reduce((acc, i) => {
+            const annual = i.amount_ttc_cents * (i.periodicity === 'monthly' ? 12 : i.periodicity === 'quarterly' ? 4 : 1);
+            return acc + Math.round(annual / 12);
+        }, 0);
         if (op.income.otherIncomeSelectedMonths.includes(monthFilter)) {
-            other = op.income.otherIncomeTTC / op.income.otherIncomeSelectedMonths.length;
+            other_cents = Math.round(op.income.otherIncomeTTC_cents / (op.income.otherIncomeSelectedMonths.length || 1));
         }
     }
-
     return [
-        { name: "Salaires / Factures", value: salary, fill: "#10b981", color: "#10b981" },
-        { name: "Autres", value: other, fill: "#6366f1", color: "#6366f1" }
+        { name: "Salaires / Factures", value: salary_cents, fill: "#3b82f6", color: "#3b82f6" },
+        { name: "Autres", value: other_cents, fill: "#6366f1", color: "#6366f1" }
     ];
 };
 
 export const getMultiYearIncomeDistribution = (operations: Operation[]) => {
-    let totalSalary = 0;
-    let totalOther = 0;
-
+    let totalSalary_cents = 0, totalOther_cents = 0;
     operations.forEach(op => {
         const d = getIncomeDistributionFromOp(op, "all");
-        totalSalary += d[0].value;
-        totalOther += d[1].value;
+        totalSalary_cents += d[0].value;
+        totalOther_cents += d[1].value;
     });
-
     return [
-        { name: "Salaires / Factures", value: totalSalary, fill: "#10b981", color: "#10b981" },
-        { name: "Autres", value: totalOther, fill: "#6366f1", color: "#6366f1" }
+        { name: "Salaires / Factures", value: totalSalary_cents, fill: "#3b82f6", color: "#3b82f6" },
+        { name: "Autres", value: totalOther_cents, fill: "#6366f1", color: "#6366f1" }
     ];
 };
 
@@ -530,9 +681,84 @@ export const getMultiYearChartData = (operations: Operation[]) => {
         const t = computeFilteredTotals(op, "all");
         return {
             name: op.year.toString(),
-            "Entrées TTC": t.incomeTTC,
-            "Sorties Réelles": t.realTreasuryOutflow,
-            "Surplus": t.incomeTTC - t.realTreasuryOutflow
+            "Entrées TTC": t.incomeTTC_cents,
+            "Sorties Réelles": t.realTreasuryOutflow_cents,
+            "Surplus": t.incomeTTC_cents - t.realTreasuryOutflow_cents
         };
     });
+};
+
+// --- Timeline & Payment Schedule ---
+
+export const getPaymentSchedule = (
+    op: Operation,
+    profile: FiscalProfile | null,
+    currentMonth: Month = MONTHS[new Date().getMonth()]
+): PaymentEvent[] => {
+    const events: PaymentEvent[] = [];
+    const currentIdx = MONTHS.indexOf(currentMonth);
+    const getStatus = (m: Month) => MONTHS.indexOf(m) <= currentIdx ? 'realized' : 'projected';
+
+    // URSSAF
+    if (op.expenses.social.urssafByMonth) {
+        Object.entries(op.expenses.social.urssafByMonth).forEach(([m, val]) => {
+            if (val > 0) events.push({ id: `urssaf-${m}`, month: m as Month, label: "Cotisations URSSAF", amount: val, type: 'social', status: getStatus(m as Month) });
+        });
+    } else if (op.expenses.social.urssaf_cents > 0) {
+        MONTHS.forEach((m, idx) => {
+            let val = 0;
+            if (op.expenses.social.urssafPeriodicity === 'monthly') val = op.expenses.social.urssaf_cents;
+            else if (op.expenses.social.urssafPeriodicity === 'quarterly' && (idx + 1) % 3 === 0) val = op.expenses.social.urssaf_cents;
+            else if (op.expenses.social.urssafPeriodicity === 'yearly' && idx === 11) val = op.expenses.social.urssaf_cents;
+            if (val > 0) events.push({ id: `urssaf-${m}`, month: m, label: "Cotisations URSSAF (Est.)", amount: val, type: 'social', status: getStatus(m) });
+        });
+    }
+
+    // IRCEC
+    if (op.expenses.social.ircecByMonth) {
+        Object.entries(op.expenses.social.ircecByMonth).forEach(([m, val]) => {
+            if (val > 0) events.push({ id: `ircec-${m}`, month: m as Month, label: "Cotisations IRCEC", amount: val, type: 'social', status: getStatus(m as Month) });
+        });
+    }
+
+    // Taxes
+    if (op.expenses.taxes.incomeTaxByMonth) {
+        Object.entries(op.expenses.taxes.incomeTaxByMonth).forEach(([m, val]) => {
+            if (val > 0) events.push({ id: `tax-${m}`, month: m as Month, label: "Prélèvement à la Source", amount: val, type: 'tax', status: getStatus(m as Month) });
+        });
+    }
+
+    // VAT
+    if (profile?.vatEnabled) {
+        const totals = computeFilteredTotals(op, "all", profile);
+        if (totals.vatNet_cents > 0) {
+            events.push({ id: `vat-total`, month: "Dec", label: "Régularisation TVA Annuelle", amount: totals.vatNet_cents, type: 'vat', status: 'projected' });
+        }
+    }
+
+    // Manual items
+    const processManualItems = (items: any[], catType: 'other' | 'personal') => { // eslint-disable-line @typescript-eslint/no-explicit-any
+        items.forEach(i => {
+            const label = i.label;
+            const type = (i as { category?: string }).category || catType;
+            const amount = i.amount_cents || i.amount_ttc_cents || 0;
+            if (i.selectedMonths && i.selectedMonths.length > 0) {
+                (i.selectedMonths as string[]).forEach((m: string) => {
+                    events.push({ id: `${i.id}-${m}`, month: m as Month, label, amount: amount, type: (type || catType) as any, status: getStatus(m as Month) }); // eslint-disable-line @typescript-eslint/no-explicit-any
+                });
+            } else {
+                MONTHS.forEach((m, idx) => {
+                    let val = 0;
+                    if (i.periodicity === 'monthly') val = amount;
+                    else if (i.periodicity === 'quarterly' && (idx + 1) % 3 === 0) val = amount;
+                    else if (i.periodicity === 'yearly' && idx === 11) val = amount;
+                    if (val > 0) events.push({ id: `${i.id}-${m}`, month: m, label, amount: val, type: (type || catType) as any, status: getStatus(m) }); // eslint-disable-line @typescript-eslint/no-explicit-any
+                });
+            }
+        });
+    };
+    processManualItems(op.expenses.otherItems, 'other');
+    processManualItems(op.expenses.personal.items, 'personal');
+
+    return events.sort((a, b) => MONTHS.indexOf(a.month) - MONTHS.indexOf(b.month));
 };

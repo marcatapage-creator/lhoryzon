@@ -48,7 +48,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
             },
         }),
         Google({
-            allowDangerousEmailAccountLinking: true,
+            allowDangerousEmailAccountLinking: false,
         })
     ],
     trustHost: true,
