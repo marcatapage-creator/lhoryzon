@@ -59,7 +59,7 @@ export default function LoginPage() {
                     </div>
                 </div>
 
-                <form action={onSubmit} method="POST">
+                <form action={onSubmit}>
                     <div className="grid gap-4">
                         <div className="grid gap-2">
                             <Label htmlFor="email">Email</Label>

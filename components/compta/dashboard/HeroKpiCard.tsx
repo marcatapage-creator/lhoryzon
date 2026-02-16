@@ -3,7 +3,7 @@
 import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { RollingNumber } from "./KpiCards";
+import { RollingNumber } from "./RollingNumber";
 import { LucideIcon } from "lucide-react";
 
 interface HeroKpiCardProps {

@@ -35,6 +35,7 @@ model AccountingOperation {
   cashCurrent_cents         BigInt           @default(0)
   isScenario                Boolean          @default(false)
   scenarioName              String?
+  isArtistAuthor            Boolean          @default(false)
   vatPaymentFrequency       String           @default("yearly")
   vatCarryover_cents        BigInt           @default(0)
   createdAt                 DateTime         @default(now())
@@ -71,6 +72,7 @@ model AccountingItem {
   type           String
   category       String
   periodicity    String              @default("yearly")
+  date           String?             // YYYY-MM-DD
   durationMonths Int?
   selectedMonths String[]
   createdAt      DateTime            @default(now())

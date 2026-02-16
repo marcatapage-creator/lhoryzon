@@ -9,7 +9,6 @@ import {
     SheetDescription
 } from "@/components/ui/sheet";
 import { useComptaStore } from "@/store/comptaStore";
-import { getPaymentSchedule } from "@/lib/compta/calculations";
 import { Month, MONTHS, PaymentEvent } from "@/lib/compta/types";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -30,6 +29,7 @@ import { cn } from "@/lib/utils";
 interface PaymentTimelineSheetProps {
     isOpen: boolean;
     onOpenChange: (open: boolean) => void;
+    schedule: PaymentEvent[];
 }
 
 const TYPE_CONFIG: Record<string, { color: string; bg: string; icon: React.ElementType; label: string }> = {
@@ -43,14 +43,13 @@ const TYPE_CONFIG: Record<string, { color: string; bg: string; icon: React.Eleme
     other: { color: "text-slate-500", bg: "bg-slate-500/10", icon: Calendar, label: "Autre" },
 };
 
-export const PaymentTimelineSheet = ({ isOpen, onOpenChange }: PaymentTimelineSheetProps) => {
-    const { operations, selectedOperationId, fiscalProfile } = useComptaStore();
+export const PaymentTimelineSheet = ({ isOpen, onOpenChange, schedule }: PaymentTimelineSheetProps) => {
+    const { operations, selectedOperationId } = useComptaStore();
 
     const op = operations.find(o => o.id === selectedOperationId);
     if (!op) return null;
 
     const actualCurrentMonth = MONTHS[new Date().getMonth()];
-    const schedule = getPaymentSchedule(op, fiscalProfile, actualCurrentMonth);
 
     // Group by month
     const grouped = schedule.reduce((acc, event) => {

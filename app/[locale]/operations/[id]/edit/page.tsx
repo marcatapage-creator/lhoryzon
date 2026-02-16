@@ -4,7 +4,7 @@ import React, { useMemo, useCallback } from "react";
 import { ComptaLayout } from "@/components/compta/compta-layout";
 import { ComptaWizard } from "@/components/compta/wizard/Wizard";
 import { useComptaStore } from "@/store/comptaStore";
-import { Operation } from "@/lib/compta/types";
+import { Operation } from "@/core/fiscal-v2/domain/types";
 import { useRouter } from "@/i18n/routing";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";

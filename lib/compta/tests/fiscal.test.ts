@@ -1,125 +1,87 @@
 import { describe, it, expect } from 'vitest';
-import { computeFilteredTotals } from '../calculations';
-import { Operation, FiscalProfile, Month } from '../types';
+import { computeFiscalSnapshot } from '@/core/fiscal-v2';
+import { DashboardPresenter } from '@/core/fiscal-v2/presenters/DashboardPresenter';
+import { Operation, FiscalContext, TreasuryAnchor } from '@/core/fiscal-v2/domain/types';
 
-describe('Fiscal Certification Test (BNC 2024)', () => {
-    const mockProfile: FiscalProfile = {
-        status: 'bnc' as any, // eslint-disable-line @typescript-eslint/no-explicit-any
-        vatEnabled: true,
-        isPro: true
+describe('Fiscal Certification Test (V2 SSOT)', () => {
+    const mockContext: FiscalContext = {
+        taxYear: 2026,
+        now: '2026-12-31T23:59:59Z',
+        userStatus: 'freelance',
+        fiscalRegime: 'reel',
+        vatRegime: 'reel_trimestriel',
+        household: { parts: 1, children: 0 },
+        options: {
+            estimateMode: true,
+            defaultVatRate: 2000
+        }
     };
 
     const mockOperation: Operation = {
-        id: 'test-audit-2024',
-        year: 2024,
+        id: 'test-audit-2026',
+        year: 2026,
         isScenario: false,
-        cashCurrent_cents: 1000000, // 10k€ starting
+        isArtistAuthor: false,
+        cashCurrent_cents: 1000000,
         vatPaymentFrequency: 'yearly',
         vatCarryover_cents: 0,
-        income: {
-            salaryTTCByMonth: {
-                Jan: 500000, Feb: 500000, Mar: 500000, Apr: 500000, May: 500000, Jun: 500000,
-                Jul: 500000, Aug: 500000, Sep: 500000, Oct: 500000, Nov: 500000, Dec: 500000,
-            }, // 5k€/month = 60k€/year
-            otherIncomeTTC_cents: 0,
-            otherIncomeVATRate_bps: 2000,
-            otherIncomeSelectedMonths: [],
-            items: []
-        },
-        expenses: {
-            pro: {
-                totalOverrideTTC_cents: null,
-                items: [
-                    {
-                        id: 'rent',
-                        label: 'Loyer Bureau',
-                        amount_ttc_cents: 100000, // 1k€/month
-                        category: 'pro',
-                        vatRate_bps: 2000,
-                        periodicity: 'monthly'
-                    }
-                ]
+        entries: [
+            // Income: 5000€/month * 12
+            {
+                id: 'income-1',
+                nature: 'INCOME',
+                label: 'Prestation',
+                amount_ttc_cents: 500000,
+                date: '2026-01-01',
+                scope: 'pro',
+                periodicity: 'monthly',
+                category: 'OTHER',
+                vatRate_bps: 0
             },
-            social: {
-                urssaf_cents: 0, // Auto-computed in simplified mode if not provided
-                urssafPeriodicity: 'monthly',
-                ircec_cents: 0,
-                ircecPeriodicity: 'monthly',
-            },
-            taxes: {
-                incomeTax_cents: 0,
-                incomeTaxPeriodicity: 'monthly',
-            },
-            personal: { items: [] },
-            otherItems: []
-        },
+            // Expense: Rent 1000€/month * 12
+            {
+                id: 'rent-1',
+                nature: 'EXPENSE_PRO',
+                label: 'Loyer Bureau',
+                amount_ttc_cents: 100000,
+                date: '2026-01-05',
+                scope: 'pro',
+                periodicity: 'monthly',
+                category: 'pro',
+                vatRate_bps: 2000
+            }
+        ],
         meta: {
-            version: 2,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            version: 3,
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z'
         }
     };
 
     it('should match the deterministic fiscal snapshot for annual totals', () => {
-        const annualTotals = computeFilteredTotals(mockOperation, 'all', mockProfile);
+        const anchor: TreasuryAnchor = { amount_cents: 1000000, monthIndex: -1 };
+        const snapshot = computeFiscalSnapshot([mockOperation], mockContext, anchor);
+        const presenter = new DashboardPresenter(snapshot);
+        const vm = presenter.getViewModel({ type: 'year', value: '2026' });
 
-        expect(annualTotals.incomeTTC_cents).toBe(6000000);
-        expect(annualTotals.profitHT_cents).toBe(4800000); // 60k - 12k
+        expect(vm.kpis.income).toBe(6000000);
+        // Profit HT is not directly in kpis, but we can check balance or safeToSpend
+        // In this mock: Income(60k) - Pro(12k) = 48k balance (before taxes if taxes=0)
+        expect(vm.kpis.balance).toBe(4800000);
 
-        // Fingerprint integrity
-        expect(annualTotals.fiscalHash).toHaveLength(8);
-        expect(annualTotals.trace.length).toBeGreaterThan(3);
-        expect(annualTotals.calcStatus).toBe('stale');
+        // Snapshot integrity
+        expect(snapshot.metadata.fiscalHash).toHaveLength(64); // SHA256
+        expect(snapshot.metadata.computedAt).toBe(mockContext.now);
     });
 
-    it('should show strict cash spikes in strictMode vs smoothed monthly view', () => {
-        // Mock a quarterly income item for this test
-        const quarterlyOp = {
-            ...mockOperation,
-            income: {
-                ...mockOperation.income,
-                salaryTTCByMonth: {
-                    Jan: 0, Feb: 0, Mar: 0, Apr: 0, May: 0, Jun: 0,
-                    Jul: 0, Aug: 0, Sep: 0, Oct: 0, Nov: 0, Dec: 0,
-                },
-                items: [{
-                    id: 'q-bonus',
-                    label: 'Quarterly Bonus',
-                    amount_ttc_cents: 300000,
-                    vatRate_bps: 0,
-                    periodicity: 'quarterly'
-                }]
-            }
-        } as Operation;
+    it('should verify monthly granularity', () => {
+        const anchor: TreasuryAnchor = { amount_cents: 1000000, monthIndex: -1 };
+        const snapshot = computeFiscalSnapshot([mockOperation], mockContext, anchor);
+        const presenter = new DashboardPresenter(snapshot);
 
-        // Jan (due month for quarterly)
-        const janStrict = computeFilteredTotals(quarterlyOp, 'Jan', mockProfile, true);
-        const janSmooth = computeFilteredTotals(quarterlyOp, 'Jan', mockProfile, false);
-
-        // Feb (not a due month for quarterly)
-        const febStrict = computeFilteredTotals(quarterlyOp, 'Feb', mockProfile, true);
-        computeFilteredTotals(quarterlyOp, 'Feb', mockProfile, false); // febSmooth unused
-
-        // Strict: Jan=3000, Feb=0
-        expect(janStrict.incomeTTC_cents).toBe(300000);
-        expect(febStrict.incomeTTC_cents).toBe(0);
-
-        // Smooth: 3000/3 = 1000 per month (total is 3000 * 4 = 12000 per year, but here it's 12000/12 = 1000)
-        expect(janSmooth.incomeTTC_cents).toBe(100000);
-        expect(janSmooth.incomeTTC_cents).toBe(100000);
-    });
-
-    it('should guarantee Σ(monthly) === annual in smoothed mode', () => {
-        const annualTotals = computeFilteredTotals(mockOperation, 'all', mockProfile);
-
-        let monthlySum_cents = 0;
-        const months: Month[] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-        months.forEach(m => {
-            const mTotals = computeFilteredTotals(mockOperation, m, mockProfile, false);
-            monthlySum_cents += mTotals.incomeTTC_cents;
-        });
-
-        expect(monthlySum_cents).toBe(annualTotals.incomeTTC_cents);
+        // Jan
+        const janVM = presenter.getViewModel({ type: 'month', value: 'Jan' });
+        expect(janVM.kpis.income).toBe(500000);
+        expect(janVM.kpis.balance).toBe(400000); // 5k - 1k
     });
 });

@@ -208,15 +208,6 @@ export default function OperationsPage() {
                                             >
                                                 <Copy size={16} />
                                             </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                className="h-8 w-8 text-slate-500 hover:text-amber-500"
-                                                onClick={() => handleSimulate(op.id, op.year)}
-                                                title="Simuler"
-                                            >
-                                                <Flask size={16} />
-                                            </Button>
                                             <AlertDialog>
                                                 <AlertDialogTrigger asChild>
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500">
@@ -262,10 +253,10 @@ export default function OperationsPage() {
                                                 </div>
                                             </div>
                                             <div className="space-y-1">
-                                                <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Charges</span>
+                                                <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Sorties Totales</span>
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-slate-400 font-bold">€</span>
-                                                    <span className="font-semibold">{formatCurrency(totals.totalExpenses_cents)}</span>
+                                                    <span className="font-semibold">{formatCurrency(totals.realTreasuryOutflow_cents)}</span>
                                                 </div>
                                             </div>
                                         </div>

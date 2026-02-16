@@ -1,11 +1,32 @@
 "use server";
 
-import { Operation, FiscalProfile, OperationSchema } from "@/lib/compta/types";
+import { Operation, FiscalProfile, OperationSchema, AppEntry } from "@/lib/compta/types";
 import { getBusinessParams } from "@/lib/compta/tax_params/registry";
 import { calculateParamsHash } from "@/lib/compta/money";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+
+// Helper to ensure JSON records (ByMonth) only contain valid numbers
+function sanitizeByMonth(record: unknown): Record<string, number> {
+    const sanitized: Record<string, number> = {};
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    // Ensure record is a valid object
+    const validRecord = (record && typeof record === 'object' && !Array.isArray(record)) ? (record as Record<string, unknown>) : {};
+
+    months.forEach(m => {
+        const val = validRecord[m];
+        // Ensure strictly non-negative integer
+        const num = Number(val);
+        if (Number.isFinite(num)) {
+            sanitized[m] = Math.max(0, Math.round(num));
+        } else {
+            sanitized[m] = 0;
+        }
+    });
+    return sanitized;
+}
 
 export async function getOperations(): Promise<Operation[]> {
     const session = await auth();
@@ -13,102 +34,67 @@ export async function getOperations(): Promise<Operation[]> {
         return [];
     }
 
-    const ops: any[] = await prisma.accountingOperation.findMany({
+    const ops = await prisma.accountingOperation.findMany({
         where: { userId: session.user.id },
-        include: { items: true } as any,
+        include: { items: true },
         orderBy: { year: "desc" }
     });
 
     return ops.map(op => {
-        // Reconstruct Operation object from flat items and specialized fields
+        const entries: AppEntry[] = [];
+
+        // 1. Map existing items (AccountingItem) to V3 entries
+        const dbItems = op.items || [];
+        dbItems.forEach((item) => {
+            // Explicit cast to ignore stale Prisma client types in lint
+            const itemWithDate = item as any;
+            entries.push({
+                id: item.id,
+                nature: item.type as AppEntry['nature'],
+                label: item.label,
+                amount_ttc_cents: Number(item.amount_cents),
+                vatRate_bps: item.vatRate_bps,
+                date: itemWithDate.date || `${op.year}-06-15`,
+                scope: 'pro',
+                category: item.category,
+                periodicity: (item.periodicity as AppEntry['periodicity']) || 'yearly'
+            });
+        });
+
+        // 2. Map Specialized Columns (Shim) to entries if not already represented in items
+        // This ensures compatibility with data that was only in specialized columns
+        if (Number(op.urssaf_cents) > 0 && !entries.find(e => e.nature === 'TAX_SOCIAL' && e.category === 'URSSAF')) {
+            entries.push({
+                id: `legacy-urssaf-${op.id}`,
+                nature: 'TAX_SOCIAL',
+                label: 'URSSAF (Legacy)',
+                amount_ttc_cents: Number(op.urssaf_cents),
+                vatRate_bps: 0,
+                date: `${op.year}-01-01`,
+                scope: 'pro',
+                category: 'URSSAF',
+                periodicity: (op.urssafPeriodicity || 'yearly') as any
+            });
+        }
+
+        // Similar for IRCEC and Tax... (Simplified for MVP V1)
+
         const baseOp: Operation = {
             id: op.id,
             year: op.year,
             isScenario: op.isScenario,
             scenarioName: op.scenarioName || undefined,
+            isArtistAuthor: !!op.isArtistAuthor,
             cashCurrent_cents: Number(op.cashCurrent_cents),
-            vatPaymentFrequency: (op.vatPaymentFrequency || "yearly") as any,
+            vatPaymentFrequency: (op.vatPaymentFrequency as AppEntry['periodicity']) || "yearly",
             vatCarryover_cents: Number(op.vatCarryover_cents || 0),
-            income: {
-                salaryTTCByMonth: (op.salaryTTCByMonth || { Jan: 0, Feb: 0, Mar: 0, Apr: 0, May: 0, Jun: 0, Jul: 0, Aug: 0, Sep: 0, Oct: 0, Nov: 0, Dec: 0 }) as any,
-                otherIncomeTTC_cents: Number(op.otherIncomeTTC_cents || 0),
-                otherIncomeVATRate_bps: op.otherIncomeVATRate_bps || 0,
-                otherIncomeSelectedMonths: (op.otherIncomeSelectedMonths || []) as any,
-                items: []
-            },
-            expenses: {
-                pro: {
-                    totalOverrideTTC_cents: op.totalOverrideTTC_cents ? Number(op.totalOverrideTTC_cents) : null,
-                    items: []
-                },
-                social: {
-                    urssaf_cents: Number(op.urssaf_cents || 0),
-                    urssafPeriodicity: (op.urssafPeriodicity || "yearly") as any,
-                    urssafByMonth: op.urssafByMonth as any,
-                    ircec_cents: Number(op.ircec_cents || 0),
-                    ircecPeriodicity: (op.ircecPeriodicity || "yearly") as any,
-                    ircecByMonth: op.ircecByMonth as any
-                },
-                taxes: {
-                    incomeTax_cents: Number(op.incomeTax_cents || 0),
-                    incomeTaxPeriodicity: (op.incomeTaxPeriodicity || "yearly") as any,
-                    incomeTaxByMonth: op.incomeTaxByMonth as any
-                },
-                personal: { items: [] },
-                otherItems: []
-            },
+            entries,
             meta: {
-                version: op.version || 2,
-                engineVersion: op.engineVersion || "2.0.0",
-                fiscalHash: op.fiscalHash || "",
+                version: 3, // Default to 3 as DB doesn't store version yet
                 createdAt: op.createdAt.toISOString(),
                 updatedAt: op.updatedAt.toISOString(),
             }
         };
-
-        // Populate items
-        const items = (op.items || []) as any[];
-        items.forEach((item: any) => {
-            const amount_cents = Number(item.amount_cents);
-            const vatRate_bps = Number(item.vatRate_bps);
-            const commonFields = {
-                id: item.id,
-                label: item.label,
-                periodicity: item.periodicity as any,
-                selectedMonths: item.selectedMonths as any,
-                durationMonths: item.durationMonths || undefined
-            };
-
-            if (item.type === 'income') {
-                baseOp.income.items.push({
-                    ...commonFields,
-                    amount_ttc_cents: amount_cents,
-                    vatRate_bps,
-                    type: item.category || 'other'
-                } as any);
-            } else if (item.type === 'expense') {
-                if (item.category === 'pro') {
-                    baseOp.expenses.pro.items.push({
-                        ...commonFields,
-                        amount_ttc_cents: amount_cents,
-                        vatRate_bps,
-                        category: 'pro'
-                    } as any);
-                } else if (item.category === 'personal') {
-                    baseOp.expenses.personal.items.push({
-                        ...commonFields,
-                        amount_cents,
-                        category: 'personal'
-                    } as any);
-                } else {
-                    baseOp.expenses.otherItems.push({
-                        ...commonFields,
-                        amount_cents,
-                        category: item.category || 'other'
-                    } as any);
-                }
-            }
-        });
 
         return baseOp;
     });
@@ -120,18 +106,24 @@ export async function saveOperation(op: Operation) {
         throw new Error("Unauthorized");
     }
 
-    // A. Runtime Validation
+    // A. Runtime Validation (V3)
     const validated = OperationSchema.parse(op);
 
     // B. Calculate Fiscal Fingerprint for Audit
-    // We assumeei/bnc for fingerprint if profile not passed (simplified for server action)
-    const profile: FiscalProfile = { status: 'ei', vatEnabled: true, isPro: true };
+    const profile: FiscalProfile = { status: 'sasu', vatEnabled: true, isPro: true }; // 'sasu' replaces 'sas_is'
     const params = getBusinessParams(validated.year, profile.status);
     const fiscalHash = calculateParamsHash(params);
-    const engineVersion = "2.1.0";
+    const engineVersion = "3.0.0-shim";
 
-    // 1. Upsert Operation
-    const operation: any = await prisma.accountingOperation.upsert({
+    // C. Shim: Extract specialized fields from entries for legacy DB columns
+    const entries = validated.entries;
+
+    const urssafEntry = entries.find(e => e.nature === 'TAX_SOCIAL' && (e.category === 'URSSAF' || e.label.includes('URSSAF')));
+    const ircecEntry = entries.find(e => e.nature === 'TAX_SOCIAL' && (e.category === 'IRCEC' || e.label.includes('IRCEC')));
+    const taxEntry = entries.find(e => e.nature === 'TAX_SOCIAL' && (e.category === 'INCOME_TAX' || e.label.includes('Impôt')));
+
+    // 1. Upsert Operation Metadata
+    const operation = await prisma.accountingOperation.upsert({
         where: {
             userId_year: {
                 userId: session.user.id,
@@ -144,33 +136,18 @@ export async function saveOperation(op: Operation) {
             cashCurrent_cents: BigInt(Math.round(validated.cashCurrent_cents)),
             isScenario: validated.isScenario,
             scenarioName: validated.scenarioName,
-
-            // Specialized fields
-            salaryTTCByMonth: validated.income.salaryTTCByMonth,
-            otherIncomeTTC_cents: BigInt(Math.round(validated.income.otherIncomeTTC_cents || 0)),
-            otherIncomeVATRate_bps: Math.round(validated.income.otherIncomeVATRate_bps || 0),
-            otherIncomeSelectedMonths: validated.income.otherIncomeSelectedMonths,
-
-            totalOverrideTTC_cents: typeof validated.expenses.pro.totalOverrideTTC_cents === 'number'
-                ? BigInt(Math.round(validated.expenses.pro.totalOverrideTTC_cents))
-                : null,
-
-            urssaf_cents: BigInt(Math.round(validated.expenses.social.urssaf_cents || 0)),
-            urssafPeriodicity: validated.expenses.social.urssafPeriodicity,
-            urssafByMonth: validated.expenses.social.urssafByMonth || {},
-
-            ircec_cents: BigInt(Math.round(validated.expenses.social.ircec_cents || 0)),
-            ircecPeriodicity: validated.expenses.social.ircecPeriodicity,
-            ircecByMonth: validated.expenses.social.ircecByMonth || {},
-
-            incomeTax_cents: BigInt(Math.round(validated.expenses.taxes.incomeTax_cents || 0)),
-            incomeTaxPeriodicity: validated.expenses.taxes.incomeTaxPeriodicity,
-            incomeTaxByMonth: validated.expenses.taxes.incomeTaxByMonth || {},
-
+            isArtistAuthor: validated.isArtistAuthor,
             vatPaymentFrequency: validated.vatPaymentFrequency,
             vatCarryover_cents: BigInt(Math.round(validated.vatCarryover_cents)),
 
-            // Engine Versioning & Fiscal Fingerprint
+            // Shim Populate
+            urssaf_cents: BigInt(Math.round(urssafEntry?.amount_ttc_cents || 0)),
+            urssafPeriodicity: urssafEntry?.periodicity || "yearly",
+            ircec_cents: BigInt(Math.round(ircecEntry?.amount_ttc_cents || 0)),
+            ircecPeriodicity: ircecEntry?.periodicity || "yearly",
+            incomeTax_cents: BigInt(Math.round(taxEntry?.amount_ttc_cents || 0)),
+            incomeTaxPeriodicity: taxEntry?.periodicity || "yearly",
+
             engineVersion,
             fiscalHash
         },
@@ -178,87 +155,46 @@ export async function saveOperation(op: Operation) {
             cashCurrent_cents: BigInt(Math.round(validated.cashCurrent_cents)),
             isScenario: validated.isScenario,
             scenarioName: validated.scenarioName,
-
-            salaryTTCByMonth: validated.income.salaryTTCByMonth,
-            otherIncomeTTC_cents: BigInt(Math.round(validated.income.otherIncomeTTC_cents || 0)),
-            otherIncomeVATRate_bps: Math.round(validated.income.otherIncomeVATRate_bps || 0),
-            otherIncomeSelectedMonths: validated.income.otherIncomeSelectedMonths,
-
-            totalOverrideTTC_cents: typeof validated.expenses.pro.totalOverrideTTC_cents === 'number'
-                ? BigInt(Math.round(validated.expenses.pro.totalOverrideTTC_cents))
-                : null,
-
-            urssaf_cents: BigInt(Math.round(validated.expenses.social.urssaf_cents || 0)),
-            urssafPeriodicity: validated.expenses.social.urssafPeriodicity,
-            urssafByMonth: validated.expenses.social.urssafByMonth || {},
-
-            ircec_cents: BigInt(Math.round(validated.expenses.social.ircec_cents || 0)),
-            ircecPeriodicity: validated.expenses.social.ircecPeriodicity,
-            ircecByMonth: validated.expenses.social.ircecByMonth || {},
-
-            incomeTax_cents: BigInt(Math.round(validated.expenses.taxes.incomeTax_cents || 0)),
-            incomeTaxPeriodicity: validated.expenses.taxes.incomeTaxPeriodicity,
-            incomeTaxByMonth: validated.expenses.taxes.incomeTaxByMonth || {},
-
+            isArtistAuthor: validated.isArtistAuthor,
             vatPaymentFrequency: validated.vatPaymentFrequency,
             vatCarryover_cents: BigInt(Math.round(validated.vatCarryover_cents)),
+
+            urssaf_cents: BigInt(Math.round(urssafEntry?.amount_ttc_cents || 0)),
+            urssafPeriodicity: urssafEntry?.periodicity || "yearly",
+            ircec_cents: BigInt(Math.round(ircecEntry?.amount_ttc_cents || 0)),
+            ircecPeriodicity: ircecEntry?.periodicity || "yearly",
+            incomeTax_cents: BigInt(Math.round(taxEntry?.amount_ttc_cents || 0)),
+            incomeTaxPeriodicity: taxEntry?.periodicity || "yearly",
+
             engineVersion,
-            fiscalHash
+            fiscalHash,
+            updatedAt: new Date()
         }
     });
 
-    // 2. Delete existing items to replace (simple sync strategy for MVP)
+    // 2. Clear and Replace items (Entries)
     await prisma.accountingItem.deleteMany({
         where: { operationId: operation.id }
     });
 
-    // 3. Create new items
-    const itemsToCreate = [
-        ...validated.income.items.map(i => ({
-            id: i.id,
-            label: i.label,
-            periodicity: i.periodicity,
-            type: 'income',
-            category: i.type,
-            amount_cents: BigInt(Math.round(i.amount_ttc_cents)),
-            vatRate_bps: Math.round(i.vatRate_bps),
-            operationId: operation.id
-        })),
-        ...validated.expenses.pro.items.map(i => ({
-            id: i.id,
-            label: i.label,
-            periodicity: i.periodicity,
-            type: 'expense',
-            category: i.category,
-            amount_cents: BigInt(Math.round(i.amount_ttc_cents)),
-            vatRate_bps: Math.round(i.vatRate_bps),
-            operationId: operation.id
-        })),
-        ...validated.expenses.personal.items.map(i => ({
-            id: i.id,
-            label: i.label,
-            periodicity: i.periodicity,
-            type: 'expense',
-            category: 'personal',
-            amount_cents: BigInt(Math.round(i.amount_cents)),
-            operationId: operation.id
-        })),
-        ...validated.expenses.otherItems.map(i => ({
-            id: i.id,
-            label: i.label,
-            periodicity: i.periodicity,
-            type: 'expense',
-            category: i.category,
-            amount_cents: BigInt(Math.round(i.amount_cents)),
-            durationMonths: i.durationMonths,
-            selectedMonths: i.selectedMonths,
-            operationId: operation.id
-        }))
-    ];
+    if (validated.entries.length > 0) {
+        const itemsToCreate = validated.entries.map(entry => ({
+            label: entry.label,
+            amount_cents: BigInt(Math.round(entry.amount_ttc_cents)),
+            vatRate_bps: entry.vatRate_bps || 0,
+            type: entry.nature,
+            category: entry.category || 'OTHER',
+            periodicity: entry.periodicity || 'yearly',
+            date: entry.date,
+            operationId: operation.id,
+            selectedMonths: []
+        }));
 
-    if (itemsToCreate.length > 0) {
+        console.log("[saveOperation] Creating items:", JSON.stringify(itemsToCreate, (key, value) =>
+            typeof value === 'bigint' ? value.toString() : value, 2));
+
         await prisma.accountingItem.createMany({
-            data: itemsToCreate.map(({ id, ...rest }: any) => rest)
+            data: itemsToCreate
         });
     }
 

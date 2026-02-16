@@ -1,11 +1,22 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import { Operation, ComptaState } from '../lib/compta/types';
+import { Operation, FiscalContext, TreasuryAnchor, AppEntry } from '@/core/fiscal-v2/domain/types';
+import { computeFiscalSnapshot } from '@/core/fiscal-v2';
 import { getOperations, saveOperation, deleteOperation as deleteOperationAction } from '@/app/actions/compta';
+import { FiscalProfile, DashboardViewState, ComptaState } from '../lib/compta/types';
+
+export type { DashboardViewState };
 
 const DRAFT_KEY = 'compta_draft_v1';
 
 
+
+// Helper to get month index string
+const monthMapping: Record<string, string> = {
+    'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'May': '05', 'Jun': '06',
+    'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+};
+const monthIndex = (m: string): string => monthMapping[m] || '01';
 
 // Helper to get draft from localStorage
 const getDraftFromStorage = () => {
@@ -32,7 +43,8 @@ export const useComptaStore = create<ComptaState>()(
             selectedOperationId: null,
             monthFilter: "all",
             currentDraft: getDraftFromStorage(),
-            fiscalProfile: null, // Default
+            fiscalProfile: null,
+            snapshot: null,
             dashboardSettings: {
                 visibleKpis: [
                     "netPocket", "nextDeadline", "qontoBalance", "projectedTreasury",
@@ -45,6 +57,11 @@ export const useComptaStore = create<ComptaState>()(
                 negativeProjection: true,
                 entryReminders: true,
                 news: true,
+            },
+            viewState: {
+                periodType: 'year',
+                selectedPeriod: '2026',
+                scope: 'all'
             },
 
             fetchOperations: async () => {
@@ -78,6 +95,7 @@ export const useComptaStore = create<ComptaState>()(
                 saveDraftToStorage(null);
                 try {
                     await saveOperation(op);
+                    get().refreshSnapshot();
                 } catch (e) {
                     console.error("Failed to save operation", e);
                 }
@@ -91,6 +109,7 @@ export const useComptaStore = create<ComptaState>()(
                 saveDraftToStorage(null);
                 try {
                     await saveOperation(op);
+                    get().refreshSnapshot();
                 } catch (e) {
                     console.error("Failed to update operation", e);
                 }
@@ -118,6 +137,7 @@ export const useComptaStore = create<ComptaState>()(
                     const newOp: Operation = {
                         ...op,
                         id: `${op.year}-${Date.now()}`,
+                        entries: [...op.entries],
                         meta: {
                             ...op.meta,
                             updatedAt: new Date().toISOString(),
@@ -140,6 +160,7 @@ export const useComptaStore = create<ComptaState>()(
                         id: `sim-${Date.now()}`,
                         isScenario: true,
                         scenarioName: `Simulation de ${op.year}`,
+                        entries: [...op.entries],
                         meta: {
                             ...op.meta,
                             updatedAt: new Date().toISOString(),
@@ -161,15 +182,67 @@ export const useComptaStore = create<ComptaState>()(
 
             setOperations: (ops) => set({ operations: ops }),
 
-            setSelectedOperationId: (id) => set({ selectedOperationId: id }),
+            setSelectedOperationId: (id) => {
+                set({ selectedOperationId: id });
+                get().refreshSnapshot();
+            },
 
-            setMonthFilter: (month) => set({ monthFilter: month }),
+            setMonthFilter: (month) => {
+                set({ monthFilter: month });
+                get().refreshSnapshot();
+            },
 
-            setFiscalProfile: (profile) => set({ fiscalProfile: profile }), // NEW
+            updateFiscalProfile: (profile: Partial<FiscalProfile>) => set((state) => ({ fiscalProfile: state.fiscalProfile ? { ...state.fiscalProfile, ...profile } : profile as FiscalProfile })),
+            setFiscalProfile: (profile: FiscalProfile) => set({ fiscalProfile: profile }),
 
             setDashboardSettings: (settings) => set({ dashboardSettings: settings }),
 
             setNotificationSettings: (settings) => set({ notificationSettings: settings }),
+
+            setViewState: (view) => {
+                set((state) => ({ viewState: { ...state.viewState, ...view } }));
+                get().refreshSnapshot();
+            },
+
+            refreshSnapshot: (nowOverride?: string) => {
+                const { operations, selectedOperationId, fiscalProfile } = get();
+                if (!operations.length || !fiscalProfile) return;
+
+                const currentOp = operations.find(o => o.id === selectedOperationId) ||
+                    operations.find(o => o.year === 2026);
+                if (!currentOp) return;
+
+                // 1. Map Profile to Context
+                const context: FiscalContext = {
+                    taxYear: currentOp.year,
+                    now: nowOverride || new Date().toISOString(),
+                    // [HOTFIX V2.5] MVP supports only Artist/MNC fully. Force artist_author for others to show taxes.
+                    userStatus: fiscalProfile.status.includes('sas') ? 'sasu' : 'artist_author',
+
+                    fiscalRegime: fiscalProfile.status.includes('micro') ? 'micro' : 'reel',
+                    vatRegime: fiscalProfile.vatEnabled ? (currentOp.vatPaymentFrequency === 'monthly' ? 'reel_mensuel' : 'reel_trimestriel') : 'franchise',
+                    household: { parts: 1, children: 0 }, // Simplified
+                    options: {
+                        estimateMode: true,
+                        vatPaymentFrequency: currentOp.vatPaymentFrequency === 'monthly' ? 'monthly' : 'yearly',
+                        defaultVatRate: fiscalProfile.vatEnabled ? 2000 : 0
+                    }
+                };
+
+                // 2. Resolve Anchor
+                const anchor: TreasuryAnchor = {
+                    amount_cents: currentOp.cashCurrent_cents || 0,
+                    monthIndex: currentOp.year === new Date().getFullYear() ? new Date().getMonth() : -1
+                };
+
+                // 3. Compute
+                try {
+                    const snapshot = computeFiscalSnapshot(operations.filter(o => o.year === currentOp.year), context, anchor);
+                    set({ snapshot });
+                } catch (err) {
+                    console.error("[comptaStore] Failed to refresh snapshot:", err);
+                }
+            },
         }),
         {
             name: 'compta_v3',
@@ -190,36 +263,88 @@ export const useComptaStore = create<ComptaState>()(
                             state.selectedOperationId = sorted[0].id;
                         }
 
-                        // Migration: Map old string IDs to new technical IDs
-                        const mapping: Record<string, string> = {
-                            "Trésorerie Qonto": "qontoBalance",
-                            "Trésorerie / Mois": "projectedTreasury",
-                            "Trésorerie / An": "projectedTreasury",
-                            "Trésorerie Finale": "projectedTreasury",
-                            "Sorties Réelles": "realTreasuryOutflow",
-                            "Surplus Réel (HT)": "netPocket",
-                            "Estimation TVA": "nextDeadline",
-                            "Engagé BTC": "btcTotal",
-                            "Engagé PER": "perTotal",
-                            "Bénéfice TTC": "netPocket", // Approx mapping
-                        };
+                        // Migration: Operation v2 -> v3
+                        state.operations = state.operations.map(op => {
+                            if (!op.meta || op.meta.version < 3) {
+                                // Safe access to legacy properties
+                                const oldOp = op as Record<string, unknown>;
+                                const entries: AppEntry[] = [];
 
-                        if (state.dashboardSettings?.visibleKpis) {
-                            state.dashboardSettings.visibleKpis = state.dashboardSettings.visibleKpis.map(id => mapping[id] || id);
+                                // 1. Salary
+                                const income = oldOp.income as Record<string, unknown> | undefined;
+                                const legacySalary = income?.salaryTTCByMonth as Record<string, unknown> | undefined;
 
-                            // Remove duplicates if any (e.g. from both "Trésorerie / Mois" and "Trésorerie Finale")
-                            state.dashboardSettings.visibleKpis = [...new Set(state.dashboardSettings.visibleKpis)];
-                        }
-
-                        // Migration: Ensure new KPIs are visible for existing users
-                        const newKpis = ["savingsRate", "breakEvenPoint", "incomeTTC"];
-                        if (state.dashboardSettings && state.dashboardSettings.visibleKpis) {
-                            newKpis.forEach(kpi => {
-                                if (!state.dashboardSettings.visibleKpis.includes(kpi)) {
-                                    state.dashboardSettings.visibleKpis.push(kpi);
+                                if (legacySalary && typeof legacySalary === 'object') {
+                                    Object.entries(legacySalary).forEach(([month, amount]) => {
+                                        const amountNum = Number(amount);
+                                        if (amountNum > 0) {
+                                            entries.push({
+                                                id: `${op.id}-mig-sal-${month}`,
+                                                nature: 'INCOME',
+                                                label: `Revenu Artistique (${month})`,
+                                                amount_ttc_cents: amountNum,
+                                                vatRate_bps: 0,
+                                                date: `${op.year}-${monthIndex(month)}-15`,
+                                                scope: 'pro',
+                                                category: 'REVENU_ARTISTIQUE',
+                                                periodicity: 'yearly'
+                                            });
+                                        }
+                                    });
                                 }
-                            });
-                        }
+
+                                // 2. Expenses Pro
+                                const expenses = oldOp.expenses as Record<string, unknown> | undefined;
+                                const pro = expenses?.pro as Record<string, unknown> | undefined;
+                                const legacyExpenses = pro?.items;
+
+                                if (Array.isArray(legacyExpenses)) {
+                                    legacyExpenses.forEach((item: Record<string, unknown>, idx: number) => {
+                                        const per = item.periodicity;
+                                        const validPeriodicity: AppEntry['periodicity'] = (per === 'monthly' || per === 'quarterly' || per === 'yearly') ? per : 'yearly';
+
+                                        entries.push({
+                                            id: `${op.id}-exp-pro-${idx}`,
+                                            nature: 'EXPENSE_PRO',
+                                            label: String(item.label || 'Sans libellé'),
+                                            amount_ttc_cents: Number(item.amount_ttc_cents || 0),
+                                            vatRate_bps: Number(item.vatRate_bps || 0),
+                                            date: `${op.year}-01-01`,
+                                            scope: 'pro',
+                                            category: String(item.category || 'PRO'),
+                                            periodicity: validPeriodicity
+                                        });
+                                    });
+                                }
+
+                                // 3. Social
+                                const social = (expenses as Record<string, unknown> | undefined)?.social as Record<string, unknown> | undefined;
+                                const urssaf_cents = Number(social?.urssaf_cents || 0);
+                                if (urssaf_cents > 0) {
+                                    const per = social?.urssafPeriodicity;
+                                    const validPeriodicity: AppEntry['periodicity'] = (per === 'monthly' || per === 'quarterly' || per === 'yearly') ? per : 'yearly';
+
+                                    entries.push({
+                                        id: `${op.id}-mig-urssaf`,
+                                        nature: 'TAX_SOCIAL',
+                                        label: 'URSSAF (Provision)',
+                                        amount_ttc_cents: urssaf_cents,
+                                        vatRate_bps: 0,
+                                        date: `${op.year}-12-15`,
+                                        scope: 'pro',
+                                        category: 'URSSAF',
+                                        periodicity: validPeriodicity
+                                    });
+                                }
+
+                                return {
+                                    ...op,
+                                    entries,
+                                    meta: { ...op.meta, version: 3, updatedAt: new Date().toISOString() }
+                                };
+                            }
+                            return op;
+                        });
                     }
                 };
             },

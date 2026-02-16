@@ -1,0 +1,171 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/marcogori/Documents/compta-standalone[39m
+
+[90mstdout[2m | core/fiscal-v2/tests/mvp_certification.test.ts
+[22m[39mDEBUG LEDGER FEB: {
+  "month": "Feb",
+  "income_ttc_cents": 500000,
+  "expense_perso_ttc_cents": 0,
+  "expense_pro_ttc_cents": 120000,
+  "expense_autre_ttc_cents": 0,
+  "vat_collected_cents": 83333,
+  "vat_deductible_cents": 20000,
+  "vat_due_cents": 0,
+  "urssaf_cash_cents": 0,
+  "ircec_cash_cents": 0,
+  "ir_cash_cents": 0,
+  "vat_cash_cents": 0,
+  "other_taxes_cash_cents": 0,
+  "net_cashflow_cents": 380000,
+  "closing_treasury_cents": 1366417,
+  "provision_social_cents": 40750,
+  "provision_tax_cents": 0,
+  "provision_vat_cents": 29167
+}
+DEBUG LEDGER MAR: {
+  "month": "Mar",
+  "income_ttc_cents": 0,
+  "expense_perso_ttc_cents": 0,
+  "expense_pro_ttc_cents": 205000,
+  "expense_autre_ttc_cents": 0,
+  "vat_collected_cents": 0,
+  "vat_deductible_cents": 34166,
+  "vat_due_cents": 0,
+  "urssaf_cash_cents": 0,
+  "ircec_cash_cents": 0,
+  "ir_cash_cents": 0,
+  "vat_cash_cents": 0,
+  "other_taxes_cash_cents": 0,
+  "net_cashflow_cents": -205000,
+  "closing_treasury_cents": 1161417,
+  "provision_social_cents": 40750,
+  "provision_tax_cents": 0,
+  "provision_vat_cents": 29167
+}
+DEBUG CERTIFICATION VM: {
+  "kpis": {
+    "income": 500000,
+    "outflow": 120000,
+    "balance": 380000,
+    "closingTreasury": 1366417,
+    "provisions": 69917,
+    "safeToSpend": 1366417,
+    "safeToSpendStatus": "SAFE"
+  },
+  "nextDue": {
+    "date": "2026-04-15",
+    "amount": 13583,
+    "label": "URSSAF Acompte T2",
+    "daysRemaining": 59
+  },
+  "charts": {
+    "expenseDistribution": [
+      {
+        "name": "Pro",
+        "value": 120000,
+        "color": "#3b82f6"
+      }
+    ],
+    "incomeDistribution": [
+      {
+        "name": "Revenus",
+        "value": 500000,
+        "color": "#3b82f6"
+      }
+    ],
+    "projectionSeries": [
+      {
+        "month": "Feb",
+        "treasury": 1366417,
+        "safeLine": 1325667
+      },
+      {
+        "month": "Mar",
+        "treasury": 1161417,
+        "safeLine": 1120667
+      },
+      {
+        "month": "Apr",
+        "treasury": 1147834,
+        "safeLine": 1120667
+      },
+      {
+        "month": "May",
+        "treasury": 1147834,
+        "safeLine": 1120667
+      },
+      {
+        "month": "Jun",
+        "treasury": 1147834,
+        "safeLine": 1120667
+      },
+      {
+        "month": "Jul",
+        "treasury": 1134251,
+        "safeLine": 1120667
+      },
+      {
+        "month": "Aug",
+        "treasury": 1134251,
+        "safeLine": 1120667
+      }
+    ]
+  }
+}
+
+[90mstdout[2m | core/fiscal-v2/tests/mvp_certification.test.ts[2m > [22m[2mMVP V1 Final Certification (Sprint 1+2)[2m > [22m[2mRef: P2-Promise3 | NextDue identifies correct liability
+[22m[39mNext Due: URSSAF Acompte T2 2026-04-15 [33m13583[39m
+
+ [31m❯[39m core/fiscal-v2/tests/mvp_certification.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 7[2mms[22m[39m
+     [32m✓[39m Ref: P1-Architecture | Should be strictly deterministic based on computedAt[32m 1[2mms[22m[39m
+[31m     [31m×[31m Ref: P2-Promise1 | Safe-to-Spend respects 30d horizon[39m[32m 4[2mms[22m[39m
+     [32m✓[39m Ref: P2-Promise2 | To-Set-Aside aggregates distinct provisions[32m 0[2mms[22m[39m
+     [32m✓[39m Ref: P2-Promise3 | NextDue identifies correct liability[32m 0[2mms[22m[39m
+[31m     [31m×[31m Ref: P2-Invariant1 | Monthly Closing Consistency[39m[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m core/fiscal-v2/tests/mvp_certification.test.ts[2m > [22mMVP V1 Final Certification (Sprint 1+2)[2m > [22mRef: P2-Promise1 | Safe-to-Spend respects 30d horizon
+[31m[1mAssertionError[22m: expected 1366417 to be 1380000 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1380000[39m
+[31m+ 1366417[39m
+
+[36m [2m❯[22m core/fiscal-v2/tests/mvp_certification.test.ts:[2m108:28[22m[39m
+    [90m106| [39m        [90m// 13 800 € attendus.[39m
+    [90m107| [39m        [35mconst[39m closingFeb [33m=[39m vm[33m.[39mkpis[33m.[39mclosingTreasury[33m;[39m
+    [90m108| [39m        [34mexpect[39m(closingFeb)[33m.[39m[34mtoBe[39m([34m1380000[39m)[33m;[39m
+    [90m   | [39m                           [31m^[39m
+    [90m109| [39m
+    [90m110| [39m        [90m// Safe To Spend[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m core/fiscal-v2/tests/mvp_certification.test.ts[2m > [22mMVP V1 Final Certification (Sprint 1+2)[2m > [22mRef: P2-Invariant1 | Monthly Closing Consistency
+[31m[1mAssertionError[22m: expected 1366417 to be 1380000 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1380000[39m
+[31m+ 1366417[39m
+
+[36m [2m❯[22m core/fiscal-v2/tests/mvp_certification.test.ts:[2m166:41[22m[39m
+    [90m164| [39m        [90m// Closing[Feb] = 13 800[39m
+    [90m165| [39m        [90m// Net Flow Feb = +3 800[39m
+    [90m166| [39m        [34mexpect[39m(vm[33m.[39mkpis[33m.[39mclosingTreasury)[33m.[39m[34mtoBe[39m([34m1000000[39m [33m+[39m [34m380000[39m)[33m;[39m
+    [90m   | [39m                                        [31m^[39m
+    [90m167| [39m    })[33m;[39m
+    [90m168| [39m})[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m3 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 18:09:01
+[2m   Duration [22m 556ms[2m (transform 68ms, setup 0ms, import 120ms, tests 7ms, environment 348ms)[22m
+

@@ -1,188 +1,85 @@
 import { useMemo } from 'react';
 import { useComptaStore } from '@/store/comptaStore';
-import { ComptaState, Operation, IncomeItem, ProExpenseItem } from '../compta/types';
-import { getFiscalProfile, FiscalProfileCode } from '@/core/fiscalEngine/factory';
-import { SimulationInput, MONTHS } from '@/core/fiscalEngine/index';
-
-// Helper to map store data to SimulationInput
-function mapStoreToInput(store: Pick<ComptaState, 'fiscalProfile' | 'operations' | 'selectedOperationId'>, year: number): SimulationInput {
-    // 1. Find Operation for the requested year
-    const op = store.operations.find((o: Operation) => o.id === store.selectedOperationId) ||
-        store.operations.find((o: Operation) => o.year === year);
-
-    if (!op) {
-        // Fallback Default
-        return {
-            year: year,
-            months: MONTHS,
-            ca_facture_ttc: 0,
-            ca_encaisse_ttc: 0,
-            charges_deductibles_ht: 0,
-            charges_non_deductibles_ttc: 0,
-            tva_collectee_reelle: 0,
-            tva_deductible_reelle: 0,
-            acomptes_urssaf_payes: 0,
-            regularisation_urssaf_n_1: 0,
-            nb_parts_fiscales: 1, // Default as store doesn't track it yet
-            personne_a_charge: 0,
-            autres_revenus_foyer: 0,
-            prelevement_source_paye: 0
-        };
-    }
-
-    // 2. Aggregate Data (Cash Basis)
-    // Income
-    // salaryTTCByMonth is likely "Encaissement" in this app context
-    const salarySum = Object.values(op.income.salaryTTCByMonth || {}).reduce((a: number, b: unknown) => a + (b as number), 0);
-    const otherIncome = op.income.otherIncomeTTC_cents || 0;
-    // Manual items
-    const manualIncome = (op.income.items || []).reduce((acc: number, item: IncomeItem) => {
-        const mult = item.periodicity === 'monthly' ? 12 : item.periodicity === 'quarterly' ? 4 : 1;
-        return acc + (item.amount_ttc_cents * mult);
-    }, 0);
-
-    const CA_TTC = salarySum + otherIncome + manualIncome;
-
-    // Expenses
-    // Pro items
-    const proSum = (op.expenses.pro.items || []).reduce((acc: number, item: ProExpenseItem) => {
-        const mult = item.periodicity === 'monthly' ? 12 : item.periodicity === 'quarterly' ? 4 : 1;
-        return acc + (item.amount_ttc_cents * mult);
-    }, 0);
-    const proOverride = op.expenses.pro.totalOverrideTTC_cents ? Number(op.expenses.pro.totalOverrideTTC_cents) : proSum;
-
-    // Deductible usually implies HT for BNC Reel, but for Micro it's ignored (Standard Abattement).
-    // Let's assume proOverride is TTC. 
-    // Approx HT = TTC / 1.2 ? No, let's keep it clean.
-    // In strict accounting, we would sum HT values. 
-    // For MVP simulator, we assume Pro Expenses are mostly deductible.
-    const Charges_Deductibles_HT = proOverride / 1.2; // Crude approx if data is TTC
-
-    // Social & Tax Paid Context
-    // Urssaf Paid so far?
-    // We can look at `op.expenses.social.urssafByMonth` sum
-    const urssafPaid = Object.values(op.expenses.social.urssafByMonth || {}).reduce((a: number, b: unknown) => a + (b as number), 0);
-    const irPaid = Object.values(op.expenses.taxes.incomeTaxByMonth || {}).reduce((a: number, b: unknown) => a + (b as number), 0);
-
-    return {
-        year: op.year,
-        months: MONTHS,
-
-        ca_facture_ttc: CA_TTC, // Assuming Facturé ~ Encaissé for simple sim
-        ca_encaisse_ttc: CA_TTC,
-
-        charges_deductibles_ht: Charges_Deductibles_HT,
-        charges_non_deductibles_ttc: 0, // Not tracked in simple store yet
-
-        tva_collectee_reelle: undefined, // Let engine compute
-        tva_deductible_reelle: undefined, // Let engine compute from charges
-
-        acomptes_urssaf_payes: urssafPaid, // What has been paid in the UI
-        regularisation_urssaf_n_1: 0,
-
-        nb_parts_fiscales: 1, // Default to 1
-        personne_a_charge: 0,
-        autres_revenus_foyer: 0, // Todo: Add to user settings
-        prelevement_source_paye: irPaid
-    };
-}
-
+import { computeFiscalSnapshot } from '@/core/fiscal-v2';
+import { SimulatorPresenter } from '@/core/fiscal-v2/presenters/SimulatorPresenter';
+import { FiscalContext, TreasuryAnchor, AppEntry } from '@/core/fiscal-v2/domain/types';
 
 export function useFiscalEngine(simulationParams?: {
     additionalExpense?: { amount_ttc: number, vat_rate: number, is_deductible: boolean },
-    socialMode?: 'approx' | 'iteratif',
-    sasuOverrides?: {
-        remunerationMode?: 'total_charge' | 'net_target',
-        remunerationAmount?: number,
-        dividendesBruts?: number
-    }
+    socialMode?: 'approx' | 'iteratif'
 }) {
-    const { fiscalProfile, operations, selectedOperationId } = useComptaStore();
+    const { fiscalProfile, operations, selectedOperationId, snapshot: storeSnapshot } = useComptaStore();
 
-    // Determine current fiscal config
-    const profileCode: FiscalProfileCode = getProfileCodeFromStore(fiscalProfile?.status);
-    const profile = getFiscalProfile(profileCode);
+    const currentOp = useMemo(() =>
+        operations.find(o => o.id === selectedOperationId) || operations.find(o => o.year === 2026),
+        [operations, selectedOperationId]);
 
-    const simulation = useMemo(() => {
-        // 1. Get Base Data (Current Year Context)
-        const baseInput = mapStoreToInput({ fiscalProfile, operations, selectedOperationId }, 2026);
+    const comparison = useMemo(() => {
+        if (!currentOp || !fiscalProfile || !storeSnapshot) return null;
 
-        // Apply Store preference or Parameter override
-        const activeSocialMode = simulationParams?.socialMode || fiscalProfile?.socialMode || 'approx';
-        baseInput.mode_assiette_sociale = activeSocialMode;
-
-        // SASU Mapping
-        baseInput.remuneration_mode = fiscalProfile?.sasuRemunerationMode || 'total_charge';
-        baseInput.remuneration_amount = fiscalProfile?.sasuRemunerationAmount || 0;
-        baseInput.dividendes_bruts = fiscalProfile?.sasuDividendesBruts || 0;
-
-        // Handle overrides via simulationParams if we add them later for "Arbitrage" distinct from Store
-        if (simulationParams?.sasuOverrides) {
-            if (simulationParams.sasuOverrides.remunerationMode) baseInput.remuneration_mode = simulationParams.sasuOverrides.remunerationMode;
-            if (simulationParams.sasuOverrides.remunerationAmount !== undefined) baseInput.remuneration_amount = simulationParams.sasuOverrides.remunerationAmount;
-            if (simulationParams.sasuOverrides.dividendesBruts !== undefined) baseInput.dividendes_bruts = simulationParams.sasuOverrides.dividendesBruts;
-        }
-
-        // 2. Apply Simulation Params (e.g. New Purchase)
-        const simulatedInput = { ...baseInput };
-        if (simulationParams?.additionalExpense) {
-            const exp = simulationParams.additionalExpense;
-            // Add to charges
-            // If deductible, add to HT (approx subtract VAT)
-            if (exp.is_deductible) {
-                const vatAmount = exp.amount_ttc * (exp.vat_rate / (10000 + exp.vat_rate)); // bps
-                simulatedInput.charges_deductibles_ht += (exp.amount_ttc - vatAmount);
-            } else {
-                simulatedInput.charges_non_deductibles_ttc += exp.amount_ttc;
-            }
-        }
-
-        // 3. Run Engine
-        const revenue = profile.computeRevenue(simulatedInput);
-        const charges = profile.computeCharges(simulatedInput);
-        const social = profile.computeSocial(simulatedInput, revenue);
-        const tax = profile.computeTax(simulatedInput, revenue, social);
-        const vat = profile.computeVat(simulatedInput);
-        const forecast = profile.computeForecast(simulatedInput, revenue, social, tax, vat);
-
-        // 4. Calculate Differential (Cost of Purchase)
-        // If we want "Real Cost", we compare Base vs Simulated.
-        // Let's Run Base first.
-        const baseRevenue = profile.computeRevenue(baseInput);
-        // const baseCharges = profile.computeCharges(baseInput);
-        const baseSocial = profile.computeSocial(baseInput, baseRevenue);
-        const baseTax = profile.computeTax(baseInput, baseRevenue, baseSocial);
-        const baseVat = profile.computeVat(baseInput);
-        const baseForecast = profile.computeForecast(baseInput, baseRevenue, baseSocial, baseTax, baseVat);
-
-        const deltaPocket = baseForecast.restant_a_vivre_annuel - forecast.restant_a_vivre_annuel;
-        // deltaPocket is "How much less money I have at the end". This is the "Real Cost".
-
-        return {
-            base: { revenue, charges, social, tax, vat, forecast },
-            simulated: { revenue, charges, social, tax, vat, forecast },
-            delta: {
-                realCost: deltaPocket,
-                savedVat: vat.tva_deductible - baseVat.tva_deductible,
-                savedTax: baseTax.impot_revenu_total - tax.impot_revenu_total,
-                savedSocial: baseSocial.cotisations_totales - social.cotisations_totales
+        // 1. Build Base Context (Sync with Store)
+        const context: FiscalContext = {
+            taxYear: currentOp.year,
+            now: new Date().toISOString(),
+            userStatus: fiscalProfile.status.includes('sas') ? 'sasu' :
+                fiscalProfile.status.includes('artist') ? 'artist_author' : 'freelance',
+            fiscalRegime: fiscalProfile.status.includes('micro') ? 'micro' : 'reel',
+            vatRegime: fiscalProfile.vatEnabled ? (currentOp.vatPaymentFrequency === 'monthly' ? 'reel_mensuel' : 'reel_trimestriel') : 'franchise',
+            household: { parts: 1, children: 0 },
+            options: {
+                estimateMode: true,
+                vatPaymentFrequency: currentOp.vatPaymentFrequency === 'monthly' ? 'monthly' : 'yearly',
+                defaultVatRate: fiscalProfile.vatEnabled ? 2000 : 0
             }
         };
 
-    }, [profile, fiscalProfile, operations, selectedOperationId, simulationParams]);
+        const anchor: TreasuryAnchor = {
+            amount_cents: currentOp.cashCurrent_cents || 0,
+            monthIndex: currentOp.year === new Date().getFullYear() ? new Date().getMonth() : -1
+        };
+
+        // 2. Prepare Simulated Operations
+        let simulatedOps = [...operations.filter(o => o.year === currentOp.year)];
+        if (simulationParams?.additionalExpense) {
+            const exp = simulationParams.additionalExpense;
+            const tvaRate = exp.vat_rate;
+            const amountTTC = exp.amount_ttc;
+
+            // Create a virtual entry (V3)
+            const virtualEntry: AppEntry = {
+                id: 'sim-virtual-exp',
+                nature: 'EXPENSE_PRO',
+                label: 'Simulated Expense',
+                amount_ttc_cents: Math.round(amountTTC),
+                vatRate_bps: tvaRate,
+                date: new Date().toISOString().split('T')[0],
+                scope: 'pro',
+                category: 'OTHER',
+                periodicity: 'yearly'
+            };
+
+            simulatedOps = simulatedOps.map(op => {
+                if (op.id === currentOp.id) {
+                    return {
+                        ...op,
+                        entries: [...op.entries, virtualEntry]
+                    };
+                }
+                return op;
+            });
+        }
+
+        // 3. Run Simulated Engine
+        const simulatedSnapshot = computeFiscalSnapshot(simulatedOps, context, anchor);
+
+        // 4. Compare
+        const presenter = new SimulatorPresenter();
+        return presenter.getComparison(storeSnapshot, simulatedSnapshot);
+
+    }, [currentOp, fiscalProfile, operations, storeSnapshot, simulationParams]);
 
     return {
-        profile,
-        simulation,
-        isLoading: false
+        simulation: comparison,
+        isLoading: !comparison
     };
-}
-
-function getProfileCodeFromStore(status?: string): FiscalProfileCode {
-    if (!status) return 'MICRO_BNC';
-    if (status.includes('micro')) return 'MICRO_BNC';
-    if (status.includes('ei')) return 'EI_REEL';
-    if (status.includes('sas')) return 'SASU_IS';
-    if (status.includes('url')) return 'EURL_IS'; // Approximation
-    return 'MICRO_BNC';
 }

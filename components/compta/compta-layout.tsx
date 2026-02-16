@@ -94,10 +94,16 @@ const ProfileSection = ({ mobile = false }: { mobile?: boolean }) => (
 export function ComptaLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const { fetchOperations } = useComptaStore();
+    const [mounted, setMounted] = React.useState(false);
 
     React.useEffect(() => {
+        setMounted(true);
         fetchOperations();
     }, [fetchOperations]);
+
+    if (!mounted) {
+        return <div className="min-h-screen bg-slate-50 dark:bg-slate-950" />;
+    }
 
     const isWizard = pathname?.includes("/operations/new") || pathname?.includes("/edit");
 

@@ -6,26 +6,37 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger, Drawer
 import { Button } from "@/components/ui/button"
 import { CalendarDays, ChevronRight } from "lucide-react"
 import { CalendarWheel } from "./CalendarWheel"
+import { useComptaStore } from "@/store/comptaStore"
 
 interface MobileDashboardSelectorProps {
     operations: Operation[]
     selectedOperationId: string | null
     onOperationChange: (id: string) => void
-    monthFilter: Month | "all"
-    onMonthChange: (month: Month | "all") => void
 }
 
 export function MobileDashboardSelector({
     operations,
     selectedOperationId,
     onOperationChange,
-    monthFilter,
-    onMonthChange,
 }: MobileDashboardSelectorProps) {
     const [open, setOpen] = React.useState(false)
+    const { viewState, setViewState } = useComptaStore()
 
     // Current effective ID (handling null as first op or "all")
     const effectiveOpId = selectedOperationId || (operations[0]?.id || "all")
+
+    // Map viewState to month/all for display/wheel
+    const currentMonthFilter: Month | "all" = viewState.periodType === 'month' ? (viewState.selectedPeriod as Month) : 'all';
+
+    const handleMonthChange = (val: string) => {
+        if (val === 'all') {
+            setViewState({ periodType: 'year', selectedPeriod: typeof selectedOperationId === 'string' ? operations.find(o => o.id === selectedOperationId)?.year.toString() || '2026' : '2026' });
+        } else if (val.startsWith('Q')) {
+            setViewState({ periodType: 'quarter', selectedPeriod: val });
+        } else {
+            setViewState({ periodType: 'month', selectedPeriod: val as any }); // Cast as any for now since we know it comes from MONTHS list
+        }
+    };
 
     // Arrays for wheels
     const opOptions = React.useMemo(() => [
@@ -43,7 +54,7 @@ export function MobileDashboardSelector({
 
     // Display labels for the trigger
     const selectedOpLabel = opOptions.find(o => o.value === effectiveOpId)?.label || "Sélectionner"
-    const selectedMonthLabel = monthOptions.find(m => m.value === monthFilter)?.label || "Période"
+    const selectedMonthLabel = monthOptions.find(m => m.value === currentMonthFilter)?.label || (viewState.periodType === 'quarter' ? viewState.selectedPeriod : "Période")
 
     return (
         <div className="md:hidden w-full">
@@ -77,8 +88,8 @@ export function MobileDashboardSelector({
                             years={opOptions}
                             selectedYear={effectiveOpId}
                             onYearChange={onOperationChange}
-                            selectedMonth={monthFilter}
-                            onMonthChange={onMonthChange}
+                            selectedMonth={currentMonthFilter}
+                            onMonthChange={(m) => handleMonthChange(m)}
                         />
                     </div>
 
